@@ -34,7 +34,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetWindowRect, MessageBoxW, IDYES, MB_DEFBUTTON2,
-    MB_ICONWARNING, MB_OK, MB_ICONINFORMATION, MB_SETFOREGROUND, MB_YESNO,
+    MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO,
 };
 
 use crate::config::GuardsConfig;

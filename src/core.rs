@@ -181,7 +181,11 @@ impl<I: IdleSource, S: Shutdowner, C: Clock, G: Guard> Machine<I, S, C, G> {
                 }
                 // Held by a guard: push `started` forward, so once the guard
                 // releases a fresh full warning countdown runs.
-                let started = if self.blocked_by.is_some() { now } else { started };
+                let started = if self.blocked_by.is_some() {
+                    now
+                } else {
+                    started
+                };
                 if now.saturating_sub(started) >= self.settings.warning {
                     self.issue()?;
                     self.state = State::Shutdown;
