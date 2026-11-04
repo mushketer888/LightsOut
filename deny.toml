@@ -1,5 +1,11 @@
 [advisories]
 version = 2
+ignore = [
+    # RUSTSEC-2024-0370: proc-macro-error unmaintained (not vulnerable).
+    # Only reached via the Linux GTK stack (glib-macros 0.18 <- tao/tray-icon/wry);
+    # unfixable until upstream moves to the gtk-rs 0.20 generation.
+    "RUSTSEC-2024-0370",
+]
 
 [licenses]
 version = 2
