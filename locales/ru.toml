@@ -11,6 +11,7 @@ settings = "Настройки..."
 open_config = "Открыть файл конфига"
 open_logs = "Открыть логи"
 about = "О программе (v{version})"
+about_update = "О программе - есть обновление!"
 quit = "Выход"
 
 [status]

@@ -11,6 +11,7 @@ settings = "Settings..."
 open_config = "Open config file"
 open_logs = "Open logs"
 about = "About (v{version})"
+about_update = "About - update available!"
 quit = "Quit"
 
 [status]

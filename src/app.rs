@@ -61,6 +61,8 @@ enum UserEvent {
         request: u64,
         error: String,
     },
+    /// Startup update check finished; `true` means a newer version exists.
+    UpdateKnown(bool),
     /// Raw JSON message from the settings page.
     Settings(String),
 }
@@ -239,6 +241,17 @@ fn now_label(tr: &Translator, action: Action) -> String {
         None => word,
     };
     tr.tr("menu.now", &[("action", &cap)])
+}
+
+/// Tray menu label for About. When a newer version is known (startup check),
+/// the label swaps to an update notice so the item has a reason to be opened;
+/// the About window still shows the exact version and runs its own live check.
+fn about_menu_text(tr: &Translator, update_known: bool) -> String {
+    if update_known {
+        tr.t("menu.about_update")
+    } else {
+        tr.tr("menu.about", &[("version", version::VERSION)])
+    }
 }
 
 fn toast(title: &str, text: &str) {
@@ -587,6 +600,20 @@ pub fn run(opts: Options) -> Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
+    // One background update check per session: when a newer version exists,
+    // the tray About item switches to an update notice. Failures stay silent;
+    // the About window runs its own live check whenever it is opened.
+    if !dry_run {
+        let update_proxy = proxy.clone();
+        let _ = std::thread::Builder::new()
+            .name("startup-update-check".into())
+            .spawn(move || {
+                let known = crate::updates::check_for_updates(version::VERSION)
+                    .is_ok_and(|update| update.is_some());
+                let _ = update_proxy.send_event(UserEvent::UpdateKnown(known));
+            });
+    }
+
     let (tx, rx) = mpsc::channel();
     let status_proxy = proxy.clone();
     let cfg_for_ui = cfg.clone();
@@ -610,14 +637,14 @@ pub fn run(opts: Options) -> Result<()> {
         let _ = menu_proxy.send_event(UserEvent::Menu(e));
     }));
 
-    let about_label = |tr: &Translator| tr.tr("menu.about", &[("version", version::VERSION)]);
+    let mut update_known = false;
     let pause = CheckMenuItem::new(tr.t("menu.pause"), true, false, None);
     let snooze = MenuItem::new(tr.t("menu.snooze"), true, None);
     let unsnooze = MenuItem::new(tr.t("menu.unsnooze"), false, None);
     let now = MenuItem::new(now_label(&tr, cfg_for_ui.action), true, None);
     let settings = MenuItem::new(tr.t("menu.settings"), true, None);
     let open_logs = MenuItem::new(tr.t("menu.open_logs"), true, None);
-    let about = MenuItem::new(about_label(&tr), true, None);
+    let about = MenuItem::new(about_menu_text(&tr, update_known), true, None);
     let quit = MenuItem::new(tr.t("menu.quit"), true, None);
 
     let menu = Menu::new();
@@ -677,6 +704,10 @@ pub fn run(opts: Options) -> Result<()> {
             _ => return,
         };
         match ev {
+            UserEvent::UpdateKnown(known) => {
+                update_known = known;
+                about.set_text(about_menu_text(&tr, update_known));
+            }
             UserEvent::Settings(raw) => {
                 let Ok(msg) = serde_json::from_str::<serde_json::Value>(&raw) else {
                     return;
@@ -712,7 +743,7 @@ pub fn run(opts: Options) -> Result<()> {
                 now.set_text(now_label(&tr, last_cfg.action));
                 settings.set_text(tr.t("menu.settings"));
                 open_logs.set_text(tr.t("menu.open_logs"));
-                about.set_text(about_label(&tr));
+                about.set_text(about_menu_text(&tr, update_known));
                 quit.set_text(tr.t("menu.quit"));
                 if let Some(w) = &mut settings_win {
                     if request.is_some() && request == w.pending {
@@ -1237,6 +1268,18 @@ mod tests {
         assert_ne!(words[0], words[2]);
     }
 
+    #[test]
+    fn about_menu_item_marks_known_updates() {
+        let en = en();
+        assert_ne!(about_menu_text(&en, true), about_menu_text(&en, false));
+        assert!(about_menu_text(&en, false).contains("v"));
+        assert!(about_menu_text(&en, true).to_lowercase().contains("update"));
+        let ru = Translator::new("ru");
+        assert!(about_menu_text(&ru, true)
+            .to_lowercase()
+            .contains("обновлени"));
+    }
+
     /// Every key the app looks up; a typo here or in the code shows up as a missing string.
     const USED_KEYS: &[&str] = &[
         "menu.pause",
@@ -1245,6 +1288,7 @@ mod tests {
         "menu.settings",
         "menu.open_logs",
         "menu.about",
+        "menu.about_update",
         "menu.quit",
         "status.watching",
         "status.paused",
