@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Тег должен совпадать с версией в Cargo.toml
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo metadata --no-deps --format-version 1 | python -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])")
+          echo "tag=$tag crate=$crate"
+          test "$tag" = "$crate"
+          echo "VERSION=$tag" >> "$GITHUB_ENV"
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+
+      - name: Установщик (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:VERSION" installer\lights-out.iss
+
+      - name: Публикация
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/LightsOut-Setup-*.exe
+            target/release/lights-out.exe

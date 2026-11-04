@@ -1,0 +1,82 @@
+# English strings. Keys must match every other locales/*.toml file (checked by tests).
+# Placeholders look like {name} and must be identical across languages.
+
+[menu]
+pause = "Pause"
+snooze = "Snooze 1h"
+unsnooze = "Cancel snooze"
+now = "{action} - now"
+shutdown_confirm = "The configured action (shutdown, hibernate, or sleep) will run immediately. Continue?"
+settings = "Settings..."
+open_config = "Open config file"
+open_logs = "Open logs"
+about = "About (v{version})"
+quit = "Quit"
+
+[status]
+watching = "watching"
+paused = "paused"
+snoozed = "snoozed"
+warning = "warning"
+shutting_down = "shutting down"
+would_shutdown = "would shut down (log-only)"
+log_only_tag = "log-only"
+held_by = "held by: {reason}"
+
+[block]
+process = "process running: {name}"
+fullscreen = "fullscreen window"
+audio = "audio is playing"
+cpu = "CPU {percent}%"
+
+[action]
+shutdown = "shutdown"
+hibernate = "hibernate"
+sleep = "sleep"
+log = "log only"
+
+[toast]
+warning = "No activity: {action} in {secs} s. Move the mouse to cancel."
+warning_log = "Idle limit reached. Log-only mode: in {secs} s this is only written to the log, nothing is shut down."
+cancelled = "Cancelled."
+failed = "Shutdown failed: {error}"
+
+[about]
+title = "LightsOut - About"
+config = "Config"
+logs = "Logs"
+dry_run = "Mode: dry-run (nothing is shut down)"
+
+[dialog]
+config_error = "Could not read the config, using defaults:\n{error}"
+already_running = "LightsOut is already running (look for the tray icon)."
+
+[settings]
+window_title = "LightsOut - Settings"
+section_timing = "Timing"
+idle = "Idle before warning"
+idle_hint = "minutes without input"
+warning = "Warning countdown"
+warning_hint = "seconds; any input cancels"
+poll = "Check interval"
+poll_hint = "seconds"
+section_behavior = "Behavior"
+action = "Action"
+action_shutdown = "Shut down"
+action_hibernate = "Hibernate"
+action_sleep = "Sleep"
+action_log = "Only write to the log (trial)"
+autostart = "Start with Windows"
+language = "Language"
+language_auto = "Auto (system)"
+section_guards = "Do not act while..."
+cpu = "CPU load above"
+cpu_hint = "percent, 0 = off"
+audio = "Audio is playing"
+fullscreen = "A fullscreen app is in front"
+processes = "Any of these processes is running"
+processes_hint = "one exe name per line, e.g. ffmpeg.exe"
+close = "Close"
+save = "Save"
+saving = "Saving..."
+saved = "Saved. Applied immediately."

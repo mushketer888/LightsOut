@@ -1,0 +1,6 @@
+/target
+
+# Installer output
+/dist
+# IDE state
+.openidea/

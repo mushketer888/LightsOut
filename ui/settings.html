@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LightsOut</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #d9d9de;
+    --field: #f4f4f6; --accent: #d99a00; --accent-fg: #ffffff;
+    --ok: #1a7f37; --err: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e; --fg: #f2f2f4; --muted: #9a9aa0; --line: #38383c;
+      --field: #2a2a2d; --accent: #f0b429; --accent-fg: #1c1c1e;
+      --ok: #4cc26a; --err: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 24px 24px; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+  }
+  h2 { margin: 18px 0 8px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  h2:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .row label { flex: 1; }
+  small { display: block; color: var(--muted); font-size: 12px; }
+  input[type=number], select, textarea {
+    background: var(--field); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit;
+  }
+  input[type=number] { width: 84px; text-align: right; }
+  textarea { width: 100%; height: 92px; margin-top: 8px; font-family: Consolas, monospace; font-size: 13px; resize: vertical; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+  .actions { display: flex; align-items: center; gap: 10px; margin-top: 20px; }
+  button { font: inherit; border-radius: 6px; padding: 7px 16px; border: 1px solid var(--line); background: var(--field); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+  #msg { flex: 1; font-size: 13px; }
+  #msg.ok { color: var(--ok); } #msg.err { color: var(--err); }
+</style>
+</head>
+<body>
+  <h2 data-i18n="section_timing"></h2>
+  <div class="row"><label for="idle_minutes"><span data-i18n="idle"></span><small data-i18n="idle_hint"></small></label><input type="number" id="idle_minutes" min="1"></div>
+  <div class="row"><label for="warning_seconds"><span data-i18n="warning"></span><small data-i18n="warning_hint"></small></label><input type="number" id="warning_seconds" min="0"></div>
+  <div class="row"><label for="poll_seconds"><span data-i18n="poll"></span><small data-i18n="poll_hint"></small></label><input type="number" id="poll_seconds" min="1"></div>
+
+  <h2 data-i18n="section_behavior"></h2>
+  <div class="row"><label for="action" data-i18n="action"></label>
+    <select id="action">
+      <option value="shutdown" data-i18n="action_shutdown"></option>
+      <option value="hibernate" data-i18n="action_hibernate"></option>
+      <option value="sleep" data-i18n="action_sleep"></option>
+      <option value="log" data-i18n="action_log"></option>
+    </select></div>
+  <div class="row"><label for="autostart" data-i18n="autostart"></label><input type="checkbox" id="autostart"></div>
+  <div class="row"><label for="language" data-i18n="language"></label><select id="language"></select></div>
+
+  <h2 data-i18n="section_guards"></h2>
+  <div class="row"><label for="cpu_above_percent"><span data-i18n="cpu"></span><small data-i18n="cpu_hint"></small></label><input type="number" id="cpu_above_percent" min="0" max="100"></div>
+  <div class="row"><label for="audio_playing" data-i18n="audio"></label><input type="checkbox" id="audio_playing"></div>
+  <!-- @todo: re-enable the fullscreen guard option once its detection
+       stops false-positiving on maximized windows with an auto-hidden
+       taskbar. The config key still works (fullscreen = true in the file).
+  <div class="row"><label for="fullscreen" data-i18n="fullscreen"></label><input type="checkbox" id="fullscreen"></div>
+  -->
+  <div style="padding-top:8px">
+    <label for="processes"><span data-i18n="processes"></span><small data-i18n="processes_hint"></small></label>
+    <textarea id="processes" spellcheck="false"></textarea>
+  </div>
+
+  <div class="actions">
+    <span id="msg"></span>
+    <button id="close" data-i18n="close"></button>
+    <button id="save" class="primary" data-i18n="save"></button>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const cfg = window.__CONFIG__;
+  const t = window.__I18N__ || {};
+  const langs = window.__LANGS__ || [];
+  const num = ["idle_minutes", "warning_seconds", "poll_seconds"];
+  const bool = ["autostart"];
+  const gnum = ["cpu_above_percent"];
+  // "fullscreen" is hidden (@todo: false-positives on maximized windows with
+  // an auto-hidden taskbar); saving leaves the key out, so it keeps the default.
+  const gbool = ["audio_playing"];
+
+  // Strings come from locales/*.toml via Rust, so the page needs no translations of its own.
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t[el.dataset.i18n] || el.dataset.i18n; });
+
+  const sel = $("language");
+  [["auto", t.language_auto || "auto"]].concat(langs.map((l) => [l.code, l.name])).forEach(([value, label]) => {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = label; sel.appendChild(o);
+  });
+  sel.value = cfg.language;
+
+  num.forEach((k) => $(k).value = cfg[k]);
+  bool.forEach((k) => $(k).checked = cfg[k]);
+  $("action").value = cfg.action;
+  gnum.forEach((k) => $(k).value = cfg.guards[k]);
+  gbool.forEach((k) => $(k).checked = cfg.guards[k]);
+  $("processes").value = cfg.guards.processes.join("\n");
+
+  function say(text, cls) { const m = $("msg"); m.textContent = text; m.className = cls || ""; }
+
+  // Called from Rust after a save attempt.
+  window.showResult = (ok, text) => say(text, ok ? "ok" : "err");
+
+  $("save").onclick = () => {
+    const out = { action: $("action").value, language: sel.value, guards: {} };
+    num.forEach((k) => out[k] = Number($(k).value));
+    bool.forEach((k) => out[k] = $(k).checked);
+    gnum.forEach((k) => out.guards[k] = Number($(k).value));
+    gbool.forEach((k) => out.guards[k] = $(k).checked);
+    out.guards.processes = $("processes").value.split("\n").map((s) => s.trim()).filter(Boolean);
+    say(t.saving || "...");
+    window.ipc.postMessage(JSON.stringify({ type: "save", config: out }));
+  };
+  $("close").onclick = () => window.ipc.postMessage(JSON.stringify({ type: "close" }));
+</script>
+</body>
+</html>

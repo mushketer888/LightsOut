@@ -1,0 +1,82 @@
+# Русские строки. Набор ключей должен совпадать с остальными locales/*.toml (проверяют тесты).
+# Плейсхолдеры вида {name} должны совпадать во всех языках.
+
+[menu]
+pause = "Пауза"
+snooze = "Отложить на 1 ч"
+unsnooze = "Отменить отсрочку"
+now = "{action} - сейчас"
+shutdown_confirm = "Сейчас выполнится настроенное действие (выключение, гибернация или сон). Продолжить?"
+settings = "Настройки..."
+open_config = "Открыть файл конфига"
+open_logs = "Открыть логи"
+about = "О программе (v{version})"
+quit = "Выход"
+
+[status]
+watching = "слежу"
+paused = "на паузе"
+snoozed = "отложено"
+warning = "предупреждение"
+shutting_down = "выключаюсь"
+would_shutdown = "выключил бы (только лог)"
+log_only_tag = "только лог"
+held_by = "держит: {reason}"
+
+[block]
+process = "запущен процесс: {name}"
+fullscreen = "полноэкранное окно"
+audio = "играет звук"
+cpu = "CPU {percent}%"
+
+[action]
+shutdown = "выключение"
+hibernate = "гибернация"
+sleep = "сон"
+log = "только лог"
+
+[toast]
+warning = "Нет активности: {action} через {secs} с. Пошевели мышкой, чтобы отменить."
+warning_log = "Лимит простоя достигнут. Режим «только лог»: через {secs} с это просто запишется в лог, ничего не выключится."
+cancelled = "Отменено."
+failed = "Не удалось выключить: {error}"
+
+[about]
+title = "LightsOut - О программе"
+config = "Конфиг"
+logs = "Логи"
+dry_run = "Режим: dry-run (ничего не выключается)"
+
+[dialog]
+config_error = "Не удалось прочитать конфиг, использую значения по умолчанию:\n{error}"
+already_running = "LightsOut уже запущен (смотри значок в трее)."
+
+[settings]
+window_title = "LightsOut - Настройки"
+section_timing = "Время"
+idle = "Простой до предупреждения"
+idle_hint = "минут без ввода"
+warning = "Отсчёт предупреждения"
+warning_hint = "секунд; любой ввод отменяет"
+poll = "Интервал проверки"
+poll_hint = "секунд"
+section_behavior = "Поведение"
+action = "Действие"
+action_shutdown = "Выключить"
+action_hibernate = "Гибернация"
+action_sleep = "Сон"
+action_log = "Только писать в лог (пробный режим)"
+autostart = "Запускать вместе с Windows"
+language = "Язык"
+language_auto = "Авто (как в системе)"
+section_guards = "Не действовать, пока..."
+cpu = "Загрузка CPU выше"
+cpu_hint = "процентов, 0 = выкл"
+audio = "Играет звук"
+fullscreen = "На переднем плане полноэкранное приложение"
+processes = "Запущен любой из этих процессов"
+processes_hint = "по одному имени exe в строке, например ffmpeg.exe"
+close = "Закрыть"
+save = "Сохранить"
+saving = "Сохраняю..."
+saved = "Сохранено. Применено сразу."
