@@ -616,7 +616,6 @@ pub fn run(opts: Options) -> Result<()> {
     let unsnooze = MenuItem::new(tr.t("menu.unsnooze"), false, None);
     let now = MenuItem::new(now_label(&tr, cfg_for_ui.action), true, None);
     let settings = MenuItem::new(tr.t("menu.settings"), true, None);
-    let open_cfg = MenuItem::new(tr.t("menu.open_config"), true, None);
     let open_logs = MenuItem::new(tr.t("menu.open_logs"), true, None);
     let about = MenuItem::new(about_label(&tr), true, None);
     let quit = MenuItem::new(tr.t("menu.quit"), true, None);
@@ -629,7 +628,6 @@ pub fn run(opts: Options) -> Result<()> {
         &now,
         &PredefinedMenuItem::separator(),
         &settings,
-        &open_cfg,
         &open_logs,
         &about,
         &PredefinedMenuItem::separator(),
@@ -713,7 +711,6 @@ pub fn run(opts: Options) -> Result<()> {
                 unsnooze.set_text(tr.t("menu.unsnooze"));
                 now.set_text(now_label(&tr, last_cfg.action));
                 settings.set_text(tr.t("menu.settings"));
-                open_cfg.set_text(tr.t("menu.open_config"));
                 open_logs.set_text(tr.t("menu.open_logs"));
                 about.set_text(about_label(&tr));
                 quit.set_text(tr.t("menu.quit"));
@@ -794,8 +791,6 @@ pub fn run(opts: Options) -> Result<()> {
                             }
                         }
                     }
-                } else if m.id == *open_cfg.id() {
-                    let _ = Command::new("notepad").arg(&paths.config_file).spawn();
                 } else if m.id == *open_logs.id() {
                     open_in_explorer(&paths.log_dir);
                 } else if m.id == *about.id() {
@@ -1248,7 +1243,6 @@ mod tests {
         "menu.snooze",
         "menu.now",
         "menu.settings",
-        "menu.open_config",
         "menu.open_logs",
         "menu.about",
         "menu.quit",

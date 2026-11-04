@@ -89,7 +89,6 @@ Do not trust a shutdown tool blindly, including this one. Take two minutes:
 | 😴 **Snooze 1h** | Pause for an hour, then carry on by itself. |
 | 🔌 **Shutdown now** | Run the chosen action immediately. |
 | ⚙️ **Settings...** | Open the settings window. |
-| 📝 **Open config file** | Edit `config.toml` in Notepad. |
 | 📜 **Open logs** | Open the logs folder. |
 | ℹ️ **About** | Version, build, file locations, and an asynchronous GitHub update check. New versions appear in bold green. |
 | 🚪 **Quit** | Exit. |
@@ -229,7 +228,6 @@ LightsOut добавляет недостающий контекст. Он сл�
 | 😴 **Отложить на 1 ч** | Пауза на час, потом работа возобновится сама. |
 | 🔌 **Выключить сейчас** | Сразу выполнить выбранное действие. |
 | ⚙️ **Настройки...** | Открыть окно настроек. |
-| 📝 **Открыть файл конфига** | Править `config.toml` в Блокноте. |
 | 📜 **Открыть логи** | Открыть папку с логами. |
 | ℹ️ **О программе** | Версия, сборка, расположение файлов и асинхронная проверка обновлений GitHub. Новая версия выделяется жирным зелёным текстом. |
 | 🚪 **Выход** | Закрыть программу. |
