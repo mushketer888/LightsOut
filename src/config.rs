@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{Action, Settings};
 
+// Windows idle sampling has a 32-bit millisecond range.
+const MAX_INTERVAL_SECONDS: u64 = u32::MAX as u64 / 1000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GuardsConfig {
@@ -84,14 +87,15 @@ impl Config {
 # If the file is invalid it is ignored and the previous settings stay active.
 
 # Minutes without keyboard or mouse input before the shutdown warning starts.
-# Minimum 1.
+# Range 1-71582 (Windows idle timer range).
 idle_minutes = {idle}
 
 # Length of the warning countdown, in seconds.
+# Range 0-4294967; 0 skips the countdown, not the guards.
 # Any keyboard or mouse input during the countdown cancels the shutdown.
 warning_seconds = {warning}
 
-# How often, in seconds, input and guards are checked. Minimum 1.
+# How often, in seconds, input and guards are checked. Range 1-4294967.
 # (During the warning countdown it is checked every second regardless.)
 poll_seconds = {poll}
 
@@ -148,8 +152,19 @@ processes = {processes}
     }
 
     pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(self.idle_minutes >= 1, "idle_minutes должен быть >= 1");
-        anyhow::ensure!(self.poll_seconds >= 1, "poll_seconds должен быть >= 1");
+        anyhow::ensure!(
+            (1..=MAX_INTERVAL_SECONDS / 60).contains(&self.idle_minutes),
+            "idle_minutes must be in 1..={}",
+            MAX_INTERVAL_SECONDS / 60
+        );
+        anyhow::ensure!(
+            (1..=MAX_INTERVAL_SECONDS).contains(&self.poll_seconds),
+            "poll_seconds must be in 1..={MAX_INTERVAL_SECONDS}"
+        );
+        anyhow::ensure!(
+            self.warning_seconds <= MAX_INTERVAL_SECONDS,
+            "warning_seconds must be in 0..={MAX_INTERVAL_SECONDS}"
+        );
         anyhow::ensure!(
             (0.0..=100.0).contains(&self.guards.cpu_above_percent),
             "cpu_above_percent должен быть в 0..=100"
@@ -284,6 +299,46 @@ mod tests {
         assert!(Config::parse("poll_seconds = 0").is_err());
         assert!(Config::parse("action = \"explode\"").is_err());
         assert!(Config::parse("idle_minutes = [").is_err());
+    }
+
+    #[test]
+    fn duration_boundaries_are_validated_before_conversion() {
+        for text in [
+            "idle_minutes = 4611686018427387904".to_string(),
+            format!("idle_minutes = {}", MAX_INTERVAL_SECONDS / 60 + 1),
+            format!("warning_seconds = {}", MAX_INTERVAL_SECONDS + 1),
+            format!("poll_seconds = {}", MAX_INTERVAL_SECONDS + 1),
+        ] {
+            assert!(Config::parse(&text).is_err(), "accepted {text}");
+        }
+
+        let cfg = Config::parse(&format!(
+            "idle_minutes = {}\nwarning_seconds = {}\npoll_seconds = {}",
+            MAX_INTERVAL_SECONDS / 60,
+            MAX_INTERVAL_SECONDS,
+            MAX_INTERVAL_SECONDS
+        ))
+        .unwrap();
+        assert_eq!(
+            cfg.settings().idle_threshold,
+            Duration::from_secs(MAX_INTERVAL_SECONDS / 60 * 60)
+        );
+        assert_eq!(
+            cfg.settings().warning,
+            Duration::from_secs(MAX_INTERVAL_SECONDS)
+        );
+        assert_eq!(
+            cfg.poll_interval(),
+            Duration::from_secs(MAX_INTERVAL_SECONDS)
+        );
+    }
+
+    #[test]
+    fn zero_warning_and_polling_longer_than_idle_remain_supported() {
+        let cfg =
+            Config::parse("idle_minutes = 1\nwarning_seconds = 0\npoll_seconds = 120").unwrap();
+        assert_eq!(cfg.settings().warning, Duration::ZERO);
+        assert!(cfg.poll_interval() > cfg.settings().idle_threshold);
     }
 
     #[test]

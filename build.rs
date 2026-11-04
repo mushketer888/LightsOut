@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use resvg::{tiny_skia, usvg};
 
+mod build_git;
+
 const ICON_SVG: &str = "assets/icon.svg";
 const TRAY_SVG: &str = "assets/tray.svg";
 const ICO_SIZES: [u32; 6] = [16, 24, 32, 48, 64, 256];
@@ -166,7 +168,10 @@ fn main() {
 
     println!("cargo:rustc-env=LIGHTS_OUT_GIT={git}");
     println!("cargo:rustc-env=LIGHTS_OUT_BUILD_DATE={y:04}-{m:02}-{d:02}");
-    println!("cargo:rerun-if-changed=.git/HEAD");
+    for path in build_git::watch_paths(Path::new(".")) {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    println!("cargo:rerun-if-changed=build_git.rs");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={ICON_SVG}");
     println!("cargo:rerun-if-changed={TRAY_SVG}");
@@ -191,8 +196,7 @@ fn main() {
                 &(2 + i as u16).to_string(),
             );
         }
-        if let Err(e) = res.compile() {
-            println!("cargo:warning=winresource skipped: {e}");
-        }
+        res.compile()
+            .expect("compile mandatory Windows icon resources");
     }
 }

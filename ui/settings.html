@@ -85,8 +85,7 @@
   const num = ["idle_minutes", "warning_seconds", "poll_seconds"];
   const bool = ["autostart"];
   const gnum = ["cpu_above_percent"];
-  // "fullscreen" is hidden (@todo: false-positives on maximized windows with
-  // an auto-hidden taskbar); saving leaves the key out, so it keeps the default.
+  // Hidden guard fields are preserved from the opening snapshot below.
   const gbool = ["audio_playing"];
 
   // Strings come from locales/*.toml via Rust, so the page needs no translations of its own.
@@ -97,29 +96,47 @@
     const o = document.createElement("option");
     o.value = value; o.textContent = label; sel.appendChild(o);
   });
-  sel.value = cfg.language;
+  const rawLanguage = cfg.language.toLowerCase();
+  const languageChoice = rawLanguage === "auto" ? "auto" : rawLanguage.split(/[-_]/)[0];
+  if (!["auto", ...langs.map((l) => l.code)].includes(languageChoice)) {
+    const o = document.createElement("option");
+    o.value = cfg.language; o.textContent = cfg.language; sel.appendChild(o);
+    sel.value = cfg.language;
+  } else {
+    sel.value = languageChoice;
+  }
+  const initialLanguageChoice = sel.value;
 
   num.forEach((k) => $(k).value = cfg[k]);
   bool.forEach((k) => $(k).checked = cfg[k]);
   $("action").value = cfg.action;
   gnum.forEach((k) => $(k).value = cfg.guards[k]);
   gbool.forEach((k) => $(k).checked = cfg.guards[k]);
+  [...num, ...gnum].forEach((k) => $(k).required = true);
   $("processes").value = cfg.guards.processes.join("\n");
 
   function say(text, cls) { const m = $("msg"); m.textContent = text; m.className = cls || ""; }
 
   // Called from Rust after a save attempt.
-  window.showResult = (ok, text) => say(text, ok ? "ok" : "err");
+  window.showResult = (ok, text) => { $("save").disabled = false; say(text, ok ? "ok" : "err"); };
 
   $("save").onclick = () => {
-    const out = { action: $("action").value, language: sel.value, guards: {} };
+    for (const k of [...num, ...gnum]) {
+      const el = $(k);
+      if (el.value.trim() === "") { say(t.number_required, "err"); el.reportValidity(); return; }
+      if (!el.reportValidity()) return;
+    }
+    const out = { ...cfg, action: $("action").value,
+      language: sel.value === initialLanguageChoice ? cfg.language : sel.value,
+      guards: { ...cfg.guards } };
     num.forEach((k) => out[k] = Number($(k).value));
     bool.forEach((k) => out[k] = $(k).checked);
     gnum.forEach((k) => out.guards[k] = Number($(k).value));
     gbool.forEach((k) => out.guards[k] = $(k).checked);
     out.guards.processes = $("processes").value.split("\n").map((s) => s.trim()).filter(Boolean);
     say(t.saving || "...");
-    window.ipc.postMessage(JSON.stringify({ type: "save", config: out }));
+    $("save").disabled = true;
+    window.ipc.postMessage(JSON.stringify({ type: "save", config: out, revision: window.__REVISION__ }));
   };
   $("close").onclick = () => window.ipc.postMessage(JSON.stringify({ type: "close" }));
 </script>

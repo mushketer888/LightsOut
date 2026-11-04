@@ -1,5 +1,5 @@
 ; Inno Setup: per-user install, no admin rights.
-; Build: iscc /DAppVersion=0.1.0 installer\lights-out.iss
+; Build: iscc /DAppVersion=0.2.0 installer\lights-out.iss
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
@@ -23,16 +23,17 @@ UninstallDisplayIcon={app}\lights-out.exe
 Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 
+[Messages]
+en.FinishedLabel=Setup has finished installing [name] on your computer.%n%nWindows startup is managed in LightsOut settings and applied when the app runs.
+ru.FinishedLabel=Установка [name] на ваш компьютер завершена.%n%nАвтозапуск Windows управляется в настройках LightsOut и применяется при запуске приложения.
+
 [CustomMessages]
-en.AutostartTask=Start with Windows
-ru.AutostartTask=Запускать при входе в Windows
 en.DesktopIconTask=Create a desktop shortcut
 ru.DesktopIconTask=Ярлык на рабочем столе
 en.RunApp=Launch LightsOut
 ru.RunApp=Запустить LightsOut
 
 [Tasks]
-Name: "autostart"; Description: "{cm:AutostartTask}"; Flags: checkedonce
 Name: "desktopicon"; Description: "{cm:DesktopIconTask}"; Flags: unchecked
 
 [Files]
@@ -49,24 +50,6 @@ Filename: "{app}\lights-out.exe"; Description: "{cm:RunApp}"; Flags: nowait post
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM lights-out.exe"; Flags: runhidden; RunOnceId: "KillApp"
 
 [Code]
-// The app syncs autostart with its config itself (autostart = true by default).
-// If the box is unchecked, write a config with autostart = false so the app does not re-add the entry.
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  CfgDir, CfgFile: String;
-begin
-  if (CurStep = ssPostInstall) and (not WizardIsTaskSelected('autostart')) then
-  begin
-    CfgDir := ExpandConstant('{userappdata}\LightsOut\config');
-    CfgFile := CfgDir + '\config.toml';
-    if not FileExists(CfgFile) then
-    begin
-      ForceDirectories(CfgDir);
-      SaveStringToFile(CfgFile, 'autostart = false' + #13#10, False);
-    end;
-  end;
-end;
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then

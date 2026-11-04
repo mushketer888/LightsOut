@@ -38,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::GuardsConfig;
-use crate::core::{Action, Block, Clock, Guard, IdleSource, Shutdowner};
+use crate::core::{Action, Block, Clock, Guard, IdleSample, IdleSource, Shutdowner};
 
 /// COM is needed by the audio guard; call once on the thread that polls guards.
 pub fn init_com() -> Result<()> {
@@ -60,17 +60,25 @@ pub fn user_locale() -> String {
 pub struct WinIdle;
 
 impl IdleSource for WinIdle {
-    fn idle_for(&self) -> Duration {
+    fn sample(&self) -> IdleSample {
         let mut info = LASTINPUTINFO {
             cbSize: size_of::<LASTINPUTINFO>() as u32,
             dwTime: 0,
         };
         // Could not ask: assume the user is at the computer.
         if !unsafe { GetLastInputInfo(&mut info) }.as_bool() {
-            return Duration::ZERO;
+            return IdleSample {
+                idle_for: Duration::ZERO,
+                last_input_id: None,
+            };
         }
         let tick = unsafe { GetTickCount() };
-        Duration::from_millis(u64::from(tick.wrapping_sub(info.dwTime)))
+        IdleSample {
+            idle_for: Duration::from_millis(u64::from(tick.wrapping_sub(info.dwTime))),
+            // Equality handles rollover without mixing uptime and Instant clocks.
+            // Inputs at exactly the same modulo-2^32 millisecond alias conservatively.
+            last_input_id: Some(info.dwTime),
+        }
     }
 }
 
@@ -514,7 +522,7 @@ mod tests {
     #[test]
     fn idle_source_reads_without_panicking() {
         // The value depends on the machine; only check it is sane (< 1 year).
-        assert!(WinIdle.idle_for() < Duration::from_secs(365 * 24 * 3600));
+        assert!(WinIdle.sample().idle_for < Duration::from_secs(365 * 24 * 3600));
     }
 
     #[test]

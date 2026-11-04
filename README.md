@@ -58,14 +58,14 @@ LightsOut adds the missing context. It watches your keyboard and mouse **and** w
 | 🌍 **English and Russian** | Follows your Windows language, switchable on the fly. Adding a language is one file. |
 | 🪶 **Tiny and quiet** | A single ~1.6 MB exe, no runtime to install, no admin rights, nothing running as a service. |
 | 📜 **Readable logs** | Every decision is logged, and logs older than 14 days clean themselves up. |
-| 🔒 **Private by design** | No network code, no telemetry, no account. Open source, so you can check. |
+| 🔒 **Private by design** | No telemetry or account. Opening About contacts GitHub to check public release/tag versions; no background update polling. |
 
 ## 📦 Install
 
 Requires Windows 10 or 11.
 
 1. Download **`LightsOut-Setup-<version>.exe`** from [Releases](https://github.com/mushketer888/LightsOut/releases) and run it. It installs just for you (no admin rights).
-2. Choose whether to start it with Windows.
+2. Launch LightsOut and choose **Start with Windows** in Settings. The installer does not maintain a separate autostart preference.
 3. Look for the 💡 bulb in the tray (it may hide behind the `^` arrow).
 
 Prefer no installer? The single `lights-out.exe` runs on its own.
@@ -91,7 +91,7 @@ Do not trust a shutdown tool blindly, including this one. Take two minutes:
 | ⚙️ **Settings...** | Open the settings window. |
 | 📝 **Open config file** | Edit `config.toml` in Notepad. |
 | 📜 **Open logs** | Open the logs folder. |
-| ℹ️ **About** | Version, build, and where your files are. |
+| ℹ️ **About** | Version, build, file locations, and an asynchronous GitHub update check. New versions appear in bold green. |
 | 🚪 **Quit** | Exit. |
 
 Hover over the icon for the status: *watching*, *paused*, *warning*, or *held by: ...* with the exact reason something is blocking the shutdown.
@@ -115,9 +115,9 @@ Everything is in **Settings...**, or in `%APPDATA%\LightsOut\config\config.toml`
 
 | Option | Default | Meaning |
 |---|---|---|
-| `idle_minutes` | `120` | Minutes without input before the warning. |
-| `warning_seconds` | `60` | Countdown length; any input cancels it. |
-| `poll_seconds` | `15` | How often to check (every second during the countdown). |
+| `idle_minutes` | `120` | Minutes without input before the warning, range 1-71582. |
+| `warning_seconds` | `60` | Countdown length, range 0-4294967; any input cancels it. Zero skips the delay, not the guards. |
+| `poll_seconds` | `15` | How often to check, range 1-4294967 seconds (every second during the countdown). |
 | `action` | `"shutdown"` | `shutdown`, `hibernate`, `sleep`, or `log` (trial). |
 | `autostart` | `true` | Start with Windows. |
 | `language` | `"auto"` | `auto` follows Windows, or `en`, `ru`. |
@@ -198,14 +198,14 @@ LightsOut добавляет недостающий контекст. Он сл�
 | 🌍 **Русский и английский** | Язык берётся из Windows, переключается на лету. Новый язык добавляется одним файлом. |
 | 🪶 **Лёгкий и тихий** | Один exe около 1,6 МБ, ставить рантайм не нужно, права администратора не нужны, служб нет. |
 | 📜 **Читаемые логи** | Каждое решение записывается, логи старше 14 дней чистятся сами. |
-| 🔒 **Приватность из коробки** | Нет сетевого кода, нет телеметрии, нет аккаунта. Код открыт, можно проверить. |
+| 🔒 **Приватность из коробки** | Нет телеметрии и аккаунта. Открытие «О программе» обращается к GitHub за публичными версиями релизов/тегов; фонового опроса обновлений нет. |
 
 ## 📦 Установка
 
 Нужна Windows 10 или 11.
 
 1. Скачайте **`LightsOut-Setup-<версия>.exe`** из [Releases](https://github.com/mushketer888/LightsOut/releases) и запустите. Ставится только для вас (права администратора не нужны).
-2. Выберите, запускать ли программу вместе с Windows.
+2. Запустите LightsOut и выберите автозапуск в Настройках. Установщик не хранит отдельную настройку автозапуска.
 3. Ищите 💡 лампочку в трее (она может прятаться за стрелкой `^`).
 
 Не хотите установщик? Один файл `lights-out.exe` работает сам по себе.
@@ -231,7 +231,7 @@ LightsOut добавляет недостающий контекст. Он сл�
 | ⚙️ **Настройки...** | Открыть окно настроек. |
 | 📝 **Открыть файл конфига** | Править `config.toml` в Блокноте. |
 | 📜 **Открыть логи** | Открыть папку с логами. |
-| ℹ️ **О программе** | Версия, сборка и где лежат ваши файлы. |
+| ℹ️ **О программе** | Версия, сборка, расположение файлов и асинхронная проверка обновлений GitHub. Новая версия выделяется жирным зелёным текстом. |
 | 🚪 **Выход** | Закрыть программу. |
 
 Наведите курсор на значок, чтобы увидеть статус: *слежу*, *на паузе*, *предупреждение* или *держит: ...* с точной причиной, почему выключение заблокировано.
@@ -255,9 +255,9 @@ LightsOut ничего не делает, пока **любой** включён
 
 | Опция | По умолчанию | Смысл |
 |---|---|---|
-| `idle_minutes` | `120` | Минут без ввода до предупреждения. |
-| `warning_seconds` | `60` | Длина отсчёта; любой ввод отменяет. |
-| `poll_seconds` | `15` | Как часто проверять (во время отсчёта каждую секунду). |
+| `idle_minutes` | `120` | Минут без ввода до предупреждения, диапазон 1-71582. |
+| `warning_seconds` | `60` | Длина отсчёта, диапазон 0-4294967 секунд; любой ввод отменяет. Ноль пропускает задержку, но не гарды. |
+| `poll_seconds` | `15` | Как часто проверять, диапазон 1-4294967 секунд (во время отсчёта каждую секунду). |
 | `action` | `"shutdown"` | `shutdown`, `hibernate`, `sleep` или `log` (пробный режим). |
 | `autostart` | `true` | Запускать вместе с Windows. |
 | `language` | `"auto"` | `auto` берёт язык Windows, либо `en`, `ru`. |

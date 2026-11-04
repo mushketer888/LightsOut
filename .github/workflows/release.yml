@@ -29,6 +29,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - run: node ui/settings.test.cjs
       - run: cargo build --release
 
       - name: Установщик (Inno Setup)

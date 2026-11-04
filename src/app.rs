@@ -17,6 +17,7 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuIt
 use tray_icon::{Icon, TrayIconBuilder};
 use wry::{WebContext, WebView, WebViewBuilder};
 
+use crate::about::AboutWindow;
 use crate::config::{Config, Paths};
 use crate::core::{Action, Event, Machine, Shutdowner, State};
 use crate::i18n::{Translator, LANGUAGES};
@@ -35,14 +36,31 @@ pub enum Control {
     Pause(bool),
     Snooze(Duration),
     Unsnooze,
-    ShutdownNow,
-    Reload(Config),
+    ShutdownNow {
+        expected_action: Action,
+        revision: u64,
+    },
+    Reload,
+    Save {
+        config: serde_json::Value,
+        revision: u64,
+        request: u64,
+    },
     Quit,
 }
 
 enum UserEvent {
     Menu(MenuEvent),
     Status(Status),
+    Applied {
+        config: Config,
+        revision: u64,
+        request: Option<u64>,
+    },
+    SaveFailed {
+        request: u64,
+        error: String,
+    },
     /// Raw JSON message from the settings page.
     Settings(String),
 }
@@ -54,8 +72,6 @@ struct Status {
     paused: bool,
     /// Snoozed: the tray shows a snooze (moon) badge.
     snoozed: bool,
-    /// Resolved UI language; the tray relabels its menu when this changes.
-    lang: &'static str,
 }
 
 /// The settings dialog: a WebView2 page in its own window.
@@ -64,6 +80,7 @@ struct SettingsWindow {
     webview: WebView,
     window: Window,
     _context: WebContext,
+    pending: Option<u64>,
 }
 
 impl SettingsWindow {
@@ -71,6 +88,7 @@ impl SettingsWindow {
         target: &EventLoopWindowTarget<UserEvent>,
         proxy: EventLoopProxy<UserEvent>,
         cfg: &Config,
+        revision: u64,
         tr: &Translator,
         data_dir: PathBuf,
     ) -> Result<Self> {
@@ -85,7 +103,7 @@ impl SettingsWindow {
             .map(|l| serde_json::json!({ "code": l.code, "name": l.name }))
             .collect();
         let init = format!(
-            "window.__CONFIG__ = {}; window.__I18N__ = {}; window.__LANGS__ = {};",
+            "window.__CONFIG__ = {}; window.__I18N__ = {}; window.__LANGS__ = {}; window.__REVISION__ = {revision};",
             serde_json::to_string(cfg)?,
             serde_json::to_string(&tr.section("settings"))?,
             serde_json::to_string(&languages)?,
@@ -102,6 +120,7 @@ impl SettingsWindow {
             webview,
             window,
             _context: context,
+            pending: None,
         })
     }
 
@@ -113,14 +132,92 @@ impl SettingsWindow {
     }
 }
 
-/// Validates and atomically writes the config (with its comments); the watcher then hot-reloads it.
-fn save_config(path: &PathBuf, json: &serde_json::Value) -> Result<()> {
+/// Validates and atomically writes the config (with its comments).
+fn save_config(path: &PathBuf, json: &serde_json::Value) -> Result<Config> {
     let cfg: Config = serde_json::from_value(json.clone()).context("invalid settings")?;
     cfg.validate()?;
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, cfg.to_commented_toml())?;
     std::fs::rename(&tmp, path)?;
-    Ok(())
+    Ok(cfg)
+}
+
+/// Shared worker handlers: the acknowledgement is produced only after apply succeeds.
+fn apply_config(
+    current: &mut Config,
+    revision: &mut u64,
+    new: Config,
+    request: Option<u64>,
+    apply: impl FnOnce(&Config) -> Result<()>,
+) -> Result<UserEvent> {
+    if new != *current {
+        let next = revision
+            .checked_add(1)
+            .context("config revision exhausted")?;
+        apply(&new)?;
+        *current = new;
+        *revision = next;
+    }
+    // Do not deduplicate against status/language: guards and action may change neither.
+    Ok(UserEvent::Applied {
+        config: current.clone(),
+        revision: *revision,
+        request,
+    })
+}
+
+fn handle_save(
+    path: &PathBuf,
+    json: &serde_json::Value,
+    (expected_revision, repair_snapshot): (u64, Option<&[u8]>),
+    request: u64,
+    current: &mut Config,
+    revision: &mut u64,
+    apply: impl FnOnce(&Config) -> Result<()>,
+) -> Result<UserEvent> {
+    anyhow::ensure!(
+        expected_revision == *revision,
+        "Settings changed; close and reopen Settings before saving."
+    );
+    // Also catch edits not yet delivered by the optional watcher. Never recreate a missing file.
+    let disk = std::fs::read(path)?;
+    if repair_snapshot != Some(disk.as_slice()) {
+        let disk = Config::parse(std::str::from_utf8(&disk)?)?;
+        anyhow::ensure!(
+            disk == *current,
+            "Config file changed; close and reopen Settings after reload before saving."
+        );
+    }
+    let new = save_config(path, json)?;
+    apply_config(current, revision, new, Some(request), apply)
+}
+
+fn confirm_action(
+    config: &Config,
+    revision: u64,
+    expected_action: Action,
+    expected_revision: u64,
+    issue: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    anyhow::ensure!(
+        config.action == expected_action && revision == expected_revision,
+        "Settings changed; confirm the current action again."
+    );
+    issue()
+}
+
+fn send_save(
+    tx: &Sender<Control>,
+    config: serde_json::Value,
+    revision: u64,
+    request: u64,
+) -> Result<()> {
+    tx.send(Control::Save {
+        config,
+        revision,
+        request,
+    })
+    .context("settings worker is unavailable")
 }
 
 fn action_word(tr: &Translator, action: Action) -> String {
@@ -156,9 +253,11 @@ fn toast(title: &str, text: &str) {
 
 fn spawn_worker(
     mut cfg: Config,
+    config_file: PathBuf,
+    mut repair_snapshot: Option<Vec<u8>>,
     dry_run: bool,
     rx: Receiver<Control>,
-    publish: impl Fn(Status) + Send + 'static,
+    publish: impl Fn(UserEvent) + Send + 'static,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         if let Err(e) = win::init_com() {
@@ -184,17 +283,22 @@ fn spawn_worker(
         let mut last_status = String::new();
         let mut last_lang = "";
         let mut last_block = None;
+        let mut revision = 0;
+        publish(UserEvent::Applied {
+            config: cfg.clone(),
+            revision,
+            request: None,
+        });
 
         loop {
             // Publish first, so the tray is correct right after start and after every event.
             let text = status_text(&machine, &tr, manual_pause, snooze_until, dry_run);
             if text != last_status || tr.code() != last_lang {
-                publish(Status {
+                publish(UserEvent::Status(Status {
                     text: text.clone(),
                     paused: manual_pause,
                     snoozed: snooze_until.is_some(),
-                    lang: tr.code(),
-                });
+                }));
                 last_status = text;
                 last_lang = tr.code();
             }
@@ -223,9 +327,16 @@ fn spawn_worker(
                     snooze_until = None;
                     tracing::info!("snooze cancelled");
                 }
-                Ok(Control::ShutdownNow) => {
+                Ok(Control::ShutdownNow {
+                    expected_action,
+                    revision: expected_revision,
+                }) => {
                     tracing::info!("Shutdown now from the menu");
-                    if let Err(e) = machine.shutdown_now() {
+                    if let Err(e) =
+                        confirm_action(&cfg, revision, expected_action, expected_revision, || {
+                            machine.shutdown_now()
+                        })
+                    {
                         tracing::error!("shutdown failed: {e:#}");
                         toast(
                             "LightsOut",
@@ -233,17 +344,58 @@ fn spawn_worker(
                         );
                     }
                 }
-                Ok(Control::Reload(new)) => {
-                    machine.set_settings(new.settings());
-                    machine.guard_mut().update(new.guards.clone());
-                    if !dry_run && new.autostart != cfg.autostart {
-                        if let Err(e) = win::set_autostart(new.autostart) {
-                            tracing::error!("autostart: {e:#}");
+                Ok(command @ (Control::Reload | Control::Save { .. })) => {
+                    let old_autostart = cfg.autostart;
+                    let apply = |new: &Config| -> Result<()> {
+                        if !dry_run && new.autostart != old_autostart {
+                            win::set_autostart(new.autostart)?;
+                        }
+                        machine.set_settings(new.settings());
+                        machine.guard_mut().update(new.guards.clone());
+                        tr = Translator::for_setting(&new.language, &locale);
+                        Ok(())
+                    };
+                    let request = match &command {
+                        Control::Save { request, .. } => Some(*request),
+                        _ => None,
+                    };
+                    let result = match command {
+                        Control::Reload => std::fs::read_to_string(&config_file)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|text| Config::parse(&text))
+                            .and_then(|new| {
+                                apply_config(&mut cfg, &mut revision, new, None, apply)
+                            }),
+                        Control::Save {
+                            config,
+                            revision: expected,
+                            request,
+                        } => handle_save(
+                            &config_file,
+                            &config,
+                            (expected, repair_snapshot.as_deref()),
+                            request,
+                            &mut cfg,
+                            &mut revision,
+                            apply,
+                        ),
+                        _ => unreachable!(),
+                    };
+                    match result {
+                        Ok(event) => {
+                            repair_snapshot = None;
+                            publish(event);
+                        }
+                        Err(e) => {
+                            tracing::warn!("config not applied: {e:#}");
+                            if let Some(request) = request {
+                                publish(UserEvent::SaveFailed {
+                                    request,
+                                    error: format!("{e:#}"),
+                                });
+                            }
                         }
                     }
-                    tr = Translator::for_setting(&new.language, &locale);
-                    cfg = new;
-                    tracing::info!(language = tr.code(), "config reloaded");
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     let snoozed = snooze_until.is_some_and(|t| Instant::now() < t);
@@ -334,6 +486,7 @@ where
             State::Warning { .. } => s.push_str(&tr.t("status.warning")),
             State::Shutdown if log_only => s.push_str(&tr.t("status.would_shutdown")),
             State::Shutdown => s.push_str(&tr.t("status.shutting_down")),
+            State::Failed => s.push_str(&tr.t("status.failed")),
             State::Active => match machine.blocked_by() {
                 Some(block) => {
                     s.push_str(&tr.tr("status.held_by", &[("reason", &tr.describe_block(block))]))
@@ -388,8 +541,9 @@ fn spawn_config_watcher(
             .map_err(anyhow::Error::from)
             .and_then(|t| Config::parse(&t))
         {
-            Ok(cfg) => {
-                let _ = tx.send(Control::Reload(cfg));
+            Ok(_) => {
+                // Read again in the worker: queued snapshots must not undo a later save.
+                let _ = tx.send(Control::Reload);
             }
             Err(e) => tracing::warn!("config not applied, keeping the old one: {e:#}"),
         }
@@ -402,9 +556,15 @@ pub fn run(opts: Options) -> Result<()> {
     let Options { dry_run, paths } = opts;
     let locale = win::user_locale();
 
+    let mut repair_snapshot = None;
     let cfg = match Config::load_or_create(&paths.config_file) {
         Ok(c) => c,
         Err(e) => {
+            repair_snapshot = std::fs::read(&paths.config_file).ok().filter(|bytes| {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .is_none_or(|text| Config::parse(text).is_err())
+            });
             tracing::error!("config is broken, running on defaults: {e:#}");
             let tr = Translator::for_setting("auto", &locale);
             win::message_box(
@@ -430,9 +590,16 @@ pub fn run(opts: Options) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let status_proxy = proxy.clone();
     let cfg_for_ui = cfg.clone();
-    let worker = spawn_worker(cfg, dry_run, rx, move |s| {
-        let _ = status_proxy.send_event(UserEvent::Status(s));
-    });
+    let worker = spawn_worker(
+        cfg,
+        paths.config_file.clone(),
+        repair_snapshot,
+        dry_run,
+        rx,
+        move |event| {
+            let _ = status_proxy.send_event(event);
+        },
+    );
     let _watcher = spawn_config_watcher(paths.config_file.clone(), tx.clone())
         .map_err(|e| tracing::warn!("hot-reload is not working: {e:#}"))
         .ok();
@@ -481,7 +648,10 @@ pub fn run(opts: Options) -> Result<()> {
 
     let mut worker = Some(worker);
     let mut settings_win: Option<SettingsWindow> = None;
+    let mut about_win: Option<AboutWindow> = None;
     let mut last_cfg = cfg_for_ui;
+    let mut revision = 0;
+    let mut next_request = 0_u64;
     let mut tray_badge = (false, false);
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -497,6 +667,12 @@ pub fn run(opts: Options) -> Result<()> {
                 {
                     settings_win = None;
                 }
+                if about_win
+                    .as_ref()
+                    .is_some_and(|w| w.window.id() == window_id)
+                {
+                    about_win = None;
+                }
                 return;
             }
             TaoEvent::UserEvent(ev) => ev,
@@ -510,39 +686,56 @@ pub fn run(opts: Options) -> Result<()> {
                 match msg["type"].as_str() {
                     Some("close") => settings_win = None,
                     Some("save") => {
-                        let result = save_config(&paths.config_file, &msg["config"]);
-                        if let Some(w) = &settings_win {
-                            match &result {
-                                Ok(()) => w.report(true, &tr.t("settings.saved")),
+                        if let Some(w) = &mut settings_win {
+                            let Some(expected) = msg["revision"].as_u64() else {
+                                return;
+                            };
+                            next_request += 1;
+                            match send_save(&tx, msg["config"].clone(), expected, next_request) {
+                                Ok(()) => w.pending = Some(next_request),
                                 Err(e) => w.report(false, &format!("{e:#}")),
                             }
-                        }
-                        match result {
-                            Ok(()) => {
-                                if let Ok(c) = Config::load_or_create(&paths.config_file) {
-                                    last_cfg = c;
-                                    now.set_text(now_label(&tr, last_cfg.action));
-                                }
-                            }
-                            Err(e) => tracing::warn!("settings not saved: {e:#}"),
                         }
                     }
                     _ => {}
                 }
             }
-            UserEvent::Status(status) => {
-                if status.lang != tr.code() {
-                    tr = Translator::new(status.lang);
-                    pause.set_text(tr.t("menu.pause"));
-                    snooze.set_text(tr.t("menu.snooze"));
-                    unsnooze.set_text(tr.t("menu.unsnooze"));
-                    now.set_text(now_label(&tr, last_cfg.action));
-                    settings.set_text(tr.t("menu.settings"));
-                    open_cfg.set_text(tr.t("menu.open_config"));
-                    open_logs.set_text(tr.t("menu.open_logs"));
-                    about.set_text(about_label(&tr));
-                    quit.set_text(tr.t("menu.quit"));
+            UserEvent::Applied {
+                config,
+                revision: applied_revision,
+                request,
+            } => {
+                last_cfg = config;
+                revision = applied_revision;
+                tr = Translator::for_setting(&last_cfg.language, &locale);
+                pause.set_text(tr.t("menu.pause"));
+                snooze.set_text(tr.t("menu.snooze"));
+                unsnooze.set_text(tr.t("menu.unsnooze"));
+                now.set_text(now_label(&tr, last_cfg.action));
+                settings.set_text(tr.t("menu.settings"));
+                open_cfg.set_text(tr.t("menu.open_config"));
+                open_logs.set_text(tr.t("menu.open_logs"));
+                about.set_text(about_label(&tr));
+                quit.set_text(tr.t("menu.quit"));
+                if let Some(w) = &mut settings_win {
+                    if request.is_some() && request == w.pending {
+                        w.pending = None;
+                        let _ = w
+                            .webview
+                            .evaluate_script(&format!("window.__REVISION__ = {revision};"));
+                        w.report(true, &tr.t("settings.saved"));
+                    }
                 }
+            }
+            UserEvent::SaveFailed { request, error } => {
+                if let Some(w) = &mut settings_win {
+                    if w.pending == Some(request) {
+                        w.pending = None;
+                        w.report(false, &error);
+                    }
+                }
+            }
+            UserEvent::Status(status) => {
                 let _ = tray.set_tooltip(Some(status.text));
                 let badge = (status.paused, status.snoozed);
                 if badge != tray_badge {
@@ -570,10 +763,15 @@ pub fn run(opts: Options) -> Result<()> {
                     let title = now_label(&tr, last_cfg.action);
                     let text = tr.t("menu.shutdown_confirm");
                     let tx_confirm = tx.clone();
+                    let expected_action = last_cfg.action;
+                    let expected_revision = revision;
                     // MessageBox blocks, so keep it off the event loop thread.
                     thread::spawn(move || {
                         if win::confirm_dialog(&title, &text) {
-                            let _ = tx_confirm.send(Control::ShutdownNow);
+                            let _ = tx_confirm.send(Control::ShutdownNow {
+                                expected_action,
+                                revision: expected_revision,
+                            });
                         }
                     });
                 } else if m.id == *settings.id() {
@@ -584,6 +782,7 @@ pub fn run(opts: Options) -> Result<()> {
                             target,
                             settings_proxy.clone(),
                             &last_cfg,
+                            revision,
                             &tr,
                             paths.webview_dir.clone(),
                         ) {
@@ -600,23 +799,33 @@ pub fn run(opts: Options) -> Result<()> {
                 } else if m.id == *open_logs.id() {
                     open_in_explorer(&paths.log_dir);
                 } else if m.id == *about.id() {
-                    let text = format!(
-                        "{}\n\n{}: {}\n{}: {}\n{}{}",
-                        version::describe(),
-                        tr.t("about.config"),
-                        paths.config_file.display(),
-                        tr.t("about.logs"),
-                        paths.log_dir.display(),
-                        version::REPO,
-                        if dry_run {
-                            format!("\n\n{}", tr.t("about.dry_run"))
-                        } else {
-                            String::new()
-                        },
-                    );
-                    let title = tr.t("about.title");
-                    // MessageBox blocks, so keep it off the event loop thread.
-                    thread::spawn(move || win::message_box(&title, &text));
+                    if let Some(w) = &about_win {
+                        w.window.set_focus();
+                    } else {
+                        match AboutWindow::open(target, &tr, &paths, dry_run) {
+                            Ok(w) => about_win = Some(w),
+                            Err(e) => {
+                                tracing::warn!("About window unavailable: {e:#}");
+                                let text = format!(
+                                    "{}\n\n{}: {}\n{}: {}\n{}\n{}{}",
+                                    version::describe(),
+                                    tr.t("about.config"),
+                                    paths.config_file.display(),
+                                    tr.t("about.logs"),
+                                    paths.log_dir.display(),
+                                    version::REPO,
+                                    tr.t("about.update_error"),
+                                    if dry_run {
+                                        format!("\n\n{}", tr.t("about.dry_run"))
+                                    } else {
+                                        String::new()
+                                    },
+                                );
+                                let title = tr.t("about.title");
+                                thread::spawn(move || win::message_box(&title, &text));
+                            }
+                        }
+                    }
                 } else if m.id == *quit.id() {
                     let _ = tx.send(Control::Quit);
                     if let Some(w) = worker.take() {
@@ -637,18 +846,22 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::core::{Block, Clock, Guard, IdleSource, Settings};
+    use crate::core::{Block, Clock, Guard, IdleSample, IdleSource, Settings};
     use crate::i18n::Translator;
 
     #[derive(Clone, Default)]
     struct Fake {
         idle: Rc<Cell<Duration>>,
         block: Rc<Cell<bool>>,
+        calls: Rc<Cell<u32>>,
     }
 
     impl IdleSource for Fake {
-        fn idle_for(&self) -> Duration {
-            self.idle.get()
+        fn sample(&self) -> IdleSample {
+            IdleSample {
+                idle_for: self.idle.get(),
+                last_input_id: Some(0),
+            }
         }
     }
     impl Clock for Fake {
@@ -663,6 +876,7 @@ mod tests {
     }
     impl Shutdowner for Fake {
         fn shutdown(&self, _: Action) -> Result<()> {
+            self.calls.set(self.calls.get() + 1);
             Ok(())
         }
     }
@@ -776,6 +990,236 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "idle_minutes = 99");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn confirmation_requires_both_action_and_revision_before_calling_core() {
+        let (fake, mut machine) = machine();
+        let cfg = Config::default();
+        assert!(confirm_action(&cfg, 2, Action::Sleep, 2, || machine.shutdown_now()).is_err());
+        assert!(confirm_action(&cfg, 2, Action::Shutdown, 1, || machine.shutdown_now()).is_err());
+        assert_eq!(fake.calls.get(), 0);
+        confirm_action(&cfg, 2, Action::Shutdown, 2, || machine.shutdown_now()).unwrap();
+        assert_eq!(fake.calls.get(), 1);
+    }
+
+    #[test]
+    fn save_without_watcher_applies_before_acknowledgement() {
+        let dir = temp_dir("save-ack");
+        let path = dir.join("config.toml");
+        let mut cfg = Config::default();
+        cfg.guards.fullscreen = true;
+        std::fs::write(&path, cfg.to_commented_toml()).unwrap();
+        let mut new = cfg.clone();
+        new.action = Action::Log;
+        let (tx, rx) = mpsc::channel();
+        send_save(&tx, serde_json::to_value(&new).unwrap(), 0, 17).unwrap();
+        let Control::Save {
+            config,
+            revision: expected,
+            request,
+        } = rx.recv().unwrap()
+        else {
+            panic!("expected Save")
+        };
+        let (fake, mut machine) = machine();
+        let mut revision = 0;
+        let applied = Cell::new(false);
+        let event = handle_save(
+            &path,
+            &config,
+            (expected, None),
+            request,
+            &mut cfg,
+            &mut revision,
+            |candidate| {
+                assert_eq!(Config::parse(&std::fs::read_to_string(&path)?)?, *candidate);
+                machine.set_settings(candidate.settings());
+                assert!(candidate.guards.fullscreen);
+                applied.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(applied.get());
+        let UserEvent::Applied {
+            config,
+            revision,
+            request,
+        } = event
+        else {
+            panic!("missing ack")
+        };
+        assert_eq!(request, Some(17));
+        assert_eq!(revision, 1);
+        assert_eq!(config, new);
+        assert_eq!(machine.settings().action, Action::Log);
+        machine.shutdown_now().unwrap();
+        assert_eq!(
+            fake.calls.get(),
+            0,
+            "log action must not reach the power sink"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_save_rejects_revision_and_unobserved_external_disk_edit() {
+        let dir = temp_dir("save-conflict");
+        let path = dir.join("config.toml");
+        let mut cfg = Config::default();
+        let mut revision = 4;
+        let original = cfg.to_commented_toml();
+        std::fs::write(&path, &original).unwrap();
+        let json = serde_json::json!({ "action": "log" });
+        assert!(handle_save(
+            &path,
+            &json,
+            (3, None),
+            1,
+            &mut cfg,
+            &mut revision,
+            |_| panic!("stale apply")
+        )
+        .is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let mut external = cfg.clone();
+        external.action = Action::Sleep;
+        let external_text = external.to_commented_toml();
+        std::fs::write(&path, &external_text).unwrap();
+        assert!(handle_save(
+            &path,
+            &json,
+            (4, None),
+            2,
+            &mut cfg,
+            &mut revision,
+            |_| panic!("conflicting apply")
+        )
+        .is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), external_text);
+        assert_eq!(revision, 4);
+        assert_eq!(cfg.action, Action::Shutdown);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn settings_can_repair_only_the_unchanged_broken_startup_file() {
+        for (index, original) in [&b"idle_minutes = ["[..], &[0xff][..]]
+            .into_iter()
+            .enumerate()
+        {
+            let dir = temp_dir(&format!("repair-{index}"));
+            let path = dir.join("config.toml");
+            let mut cfg = Config::default();
+            let mut revision = 0;
+            let json = serde_json::json!({ "action": "log" });
+            std::fs::write(&path, original).unwrap();
+
+            assert!(handle_save(
+                &path,
+                &json,
+                (0, None),
+                1,
+                &mut cfg,
+                &mut revision,
+                |_| panic!("unrecognized broken file must not apply"),
+            )
+            .is_err());
+
+            let external = b"warning_seconds = [";
+            std::fs::write(&path, external).unwrap();
+            assert!(handle_save(
+                &path,
+                &json,
+                (0, Some(original)),
+                2,
+                &mut cfg,
+                &mut revision,
+                |_| panic!("intervening edit must not apply"),
+            )
+            .is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), external);
+            assert_eq!(revision, 0);
+
+            std::fs::write(&path, original).unwrap();
+            let applied = Cell::new(false);
+            let event = handle_save(
+                &path,
+                &json,
+                (0, Some(original)),
+                3,
+                &mut cfg,
+                &mut revision,
+                |candidate| {
+                    assert_eq!(Config::load_or_create(&path)?, *candidate);
+                    applied.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(applied.get());
+            assert!(matches!(
+                event,
+                UserEvent::Applied {
+                    request: Some(3),
+                    ..
+                }
+            ));
+            assert_eq!(cfg.action, Action::Log);
+            assert_eq!(revision, 1);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn applied_snapshot_is_emitted_for_same_language_same_status_and_duplicate_reload() {
+        let mut cfg = Config::default();
+        let mut revision = 0;
+        let mut new = cfg.clone();
+        new.guards.fullscreen = true;
+        let calls = Cell::new(0);
+        let event = apply_config(&mut cfg, &mut revision, new.clone(), None, |_| {
+            calls.set(1);
+            Ok(())
+        })
+        .unwrap();
+        let UserEvent::Applied {
+            config,
+            revision: seen,
+            request,
+        } = event
+        else {
+            panic!("missing applied snapshot")
+        };
+        assert_eq!(config, new);
+        assert_eq!(seen, 1);
+        assert_eq!(request, None);
+        assert_eq!(calls.get(), 1);
+        let event = apply_config(&mut cfg, &mut revision, new, None, |_| {
+            panic!("duplicate apply")
+        })
+        .unwrap();
+        assert!(matches!(event, UserEvent::Applied { revision: 1, .. }));
+    }
+
+    #[test]
+    fn failed_worker_channel_and_apply_never_acknowledge_success() {
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        assert!(send_save(&tx, serde_json::json!({}), 0, 1).is_err());
+        let mut cfg = Config::default();
+        let mut revision = 0;
+        let mut new = cfg.clone();
+        new.action = Action::Log;
+        assert!(
+            apply_config(&mut cfg, &mut revision, new, Some(1), |_| anyhow::bail!(
+                "fake worker failure"
+            ))
+            .is_err()
+        );
+        assert_eq!(cfg.action, Action::Shutdown);
+        assert_eq!(revision, 0);
     }
 
     #[test]
