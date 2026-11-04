@@ -293,7 +293,7 @@ mod tests {
         for l in LANGUAGES {
             let tr = Translator::new(l.code);
             for block in [
-                Block::Process("ffmpeg.exe".into()),
+                Block::Process("steam.exe".into()),
                 Block::Fullscreen,
                 Block::Audio,
                 Block::Cpu(42),

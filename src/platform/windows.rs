@@ -436,18 +436,18 @@ mod tests {
 
     #[test]
     fn process_match_is_case_insensitive() {
-        let running = names(&["explorer.exe", "ffmpeg.exe", "code.exe"]);
+        let running = names(&["explorer.exe", "steam.exe", "code.exe"]);
         assert_eq!(
-            find_blocking_process(&running, &names(&["FFmpeg.EXE"])),
-            Some("ffmpeg.exe".to_string())
+            find_blocking_process(&running, &names(&["Steam.EXE"])),
+            Some("steam.exe".to_string())
         );
     }
 
     #[test]
     fn process_match_requires_exact_name() {
-        let running = names(&["ffmpeg-helper.exe", "notffmpeg.exe"]);
+        let running = names(&["steam-helper.exe", "notsteam.exe"]);
         assert_eq!(
-            find_blocking_process(&running, &names(&["ffmpeg.exe"])),
+            find_blocking_process(&running, &names(&["steam.exe"])),
             None
         );
     }

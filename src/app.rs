@@ -959,14 +959,14 @@ mod tests {
         let json = serde_json::json!({
             "idle_minutes": 30,
             "action": "hibernate",
-            "guards": { "processes": ["ffmpeg.exe"], "audio_playing": false }
+            "guards": { "processes": ["steam.exe"], "audio_playing": false }
         });
         save_config(&path, &json).unwrap();
 
         let saved = Config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved.idle_minutes, 30);
         assert_eq!(saved.action, Action::Hibernate);
-        assert_eq!(saved.guards.processes, ["ffmpeg.exe"]);
+        assert_eq!(saved.guards.processes, ["steam.exe"]);
         assert!(!saved.guards.audio_playing);
         // Unspecified fields fall back to defaults.
         assert_eq!(saved.warning_seconds, Config::default().warning_seconds);

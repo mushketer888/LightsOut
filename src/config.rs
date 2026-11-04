@@ -131,7 +131,7 @@ audio_playing = {audio}
 fullscreen = {fullscreen}
 
 # Busy while any of these programs is running. Exact exe file names,
-# case-insensitive, for example ["ffmpeg.exe", "blender.exe"].
+# case-insensitive, for example ["steam.exe", "blender.exe"].
 # An empty list turns the check off.
 processes = {processes}
 "#,
@@ -242,7 +242,7 @@ mod tests {
                 fullscreen: false,
                 // Quotes, backslashes and non-ASCII must survive the template.
                 processes: vec![
-                    "ffmpeg.exe".into(),
+                    "steam.exe".into(),
                     "My \"App\".exe".into(),
                     "Игра.exe".into(),
                 ],
@@ -351,8 +351,8 @@ mod tests {
     #[test]
     fn processes_are_blank_by_default_but_configurable() {
         assert!(Config::default().guards.processes.is_empty());
-        let cfg = Config::parse("[guards]\nprocesses = [\"ffmpeg.exe\", \"Blender.exe\"]").unwrap();
-        assert_eq!(cfg.guards.processes, ["ffmpeg.exe", "Blender.exe"]);
+        let cfg = Config::parse("[guards]\nprocesses = [\"steam.exe\", \"Blender.exe\"]").unwrap();
+        assert_eq!(cfg.guards.processes, ["steam.exe", "Blender.exe"]);
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

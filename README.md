@@ -105,7 +105,7 @@ LightsOut does nothing while **any** enabled guard says "busy". If one turns bus
 | 🎵 **Audio** | The default audio device is playing sound (music, video, calls). | off |
 | 🖥️ **Fullscreen** | A fullscreen window (game, player) is in front. | off |
 | 🔥 **CPU** | Total CPU load is above the given percent (builds, renders). | 20 % |
-| 🧩 **Programs** | Any program from your list is running, e.g. `ffmpeg.exe`. | empty |
+| 🧩 **Programs** | Any program from your list is running, e.g. `steam.exe`. | empty |
 
 Audio and Fullscreen are off by default: a notification sound or a maximized window with an auto-hidden taskbar can read as "busy" and hold the shutdown for no reason. Turn them on in Settings if that is not your case.
 
@@ -245,7 +245,7 @@ LightsOut ничего не делает, пока **любой** включён
 | 🎵 **Звук** | Основное устройство воспроизводит звук (музыка, видео, звонки). | выкл |
 | 🖥️ **Полный экран** | На переднем плане полноэкранное окно (игра, плеер). | выкл |
 | 🔥 **CPU** | Общая загрузка процессора выше заданного процента (сборки, рендер). | 20 % |
-| 🧩 **Программы** | Запущена любая программа из вашего списка, например `ffmpeg.exe`. | пусто |
+| 🧩 **Программы** | Запущена любая программа из вашего списка, например `steam.exe`. | пусто |
 
 «Звук» и «Полный экран» по умолчанию выключены: звук уведомления или развёрнутое окно с автоскрытием панели задач выглядит как «занято» и без причины держит выключение. Включите их в Настройках, если вам это нужно.
 
