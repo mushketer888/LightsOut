@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "glib"
+        # Linux-only transitive dep (GTK stack via tao/tray-icon/wry).
+        # The Windows build never compiles or links it. Bumping to the
+        # patched 0.20 line is blocked upstream: tao/tray-icon/wry still
+        # pin the gtk-rs 0.18 generation, so security updates for glib
+        # always fail with security_update_not_possible.
