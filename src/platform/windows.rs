@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, FILETIME, HANDLE, LUID, RECT,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_NO_MORE_FILES, FILETIME, HANDLE, LUID,
+    RECT,
 };
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 use windows::Win32::Graphics::Gdi::{
@@ -229,8 +230,7 @@ impl CpuSampler {
     }
 }
 
-fn audio_is_playing() -> bool {
-    // Any error (no device, etc.) counts as no audio.
+fn audio_is_playing() -> Result<bool> {
     let peak = || -> windows::core::Result<f32> {
         unsafe {
             let enumerator: IMMDeviceEnumerator =
@@ -240,70 +240,113 @@ fn audio_is_playing() -> bool {
             meter.GetPeakValue()
         }
     };
-    peak().map(|p| p > 0.001).unwrap_or(false)
+    Ok(peak()? > 0.001)
 }
 
-fn foreground_is_fullscreen() -> bool {
+fn foreground_is_fullscreen() -> Result<bool> {
     // @todo: a maximized window with an auto-hidden taskbar covers the whole
     // monitor and false-positives here. Compare against the work area and
     // check window styles (no caption + no resize borders) before trusting it.
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
-            return false;
+            return Ok(false);
         }
         // The desktop and shell "fullscreen" windows do not count.
         let mut class = [0u16; 64];
         let n = GetClassNameW(hwnd, &mut class) as usize;
         let class = String::from_utf16_lossy(&class[..n]);
         if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
-            return false;
+            return Ok(false);
         }
         let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return false;
-        }
+        GetWindowRect(hwnd, &mut rect)?;
         let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         let mut mi = MONITORINFO {
             cbSize: size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
         if !GetMonitorInfoW(monitor, &mut mi).as_bool() {
-            return false;
+            return Err(windows::core::Error::from_thread().into());
         }
         let m = mi.rcMonitor;
-        rect.left <= m.left && rect.top <= m.top && rect.right >= m.right && rect.bottom >= m.bottom
+        Ok(rect.left <= m.left
+            && rect.top <= m.top
+            && rect.right >= m.right
+            && rect.bottom >= m.bottom)
     }
 }
 
-fn running_processes() -> Vec<String> {
+fn running_processes() -> Result<Vec<String>> {
     let mut names = Vec::new();
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return names;
-        };
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?;
         let mut entry = PROCESSENTRY32W {
             dwSize: size_of::<PROCESSENTRY32W>() as u32,
             ..Default::default()
         };
-        let mut ok = Process32FirstW(snap, &mut entry).is_ok();
-        while ok {
+        let mut next = Process32FirstW(snap, &mut entry);
+        while next.is_ok() {
             let len = entry
                 .szExeFile
                 .iter()
                 .position(|&c| c == 0)
                 .unwrap_or(entry.szExeFile.len());
             names.push(String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase());
-            ok = Process32NextW(snap, &mut entry).is_ok();
+            next = Process32NextW(snap, &mut entry);
         }
         let _ = CloseHandle(snap);
+        if let Err(error) = next {
+            if error.code() != windows::core::HRESULT::from_win32(ERROR_NO_MORE_FILES.0) {
+                return Err(error.into());
+            }
+        }
     }
-    names
+    Ok(names)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GuardReading {
+    Disabled,
+    Clear,
+    Busy(Block),
+    Unavailable,
+}
+
+impl GuardReading {
+    fn from_result(result: Result<Option<Block>>) -> Self {
+        match result {
+            Ok(Some(block)) => Self::Busy(block),
+            Ok(None) => Self::Clear,
+            Err(_) => Self::Unavailable,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GuardSnapshot {
+    pub cpu_percent: Option<f32>,
+    pub cpu: GuardReading,
+    pub audio: GuardReading,
+    pub fullscreen: GuardReading,
+    pub processes: GuardReading,
+}
+
+impl GuardSnapshot {
+    fn blocker(&self) -> Option<Block> {
+        [&self.processes, &self.fullscreen, &self.audio, &self.cpu]
+            .into_iter()
+            .find_map(|reading| match reading {
+                GuardReading::Busy(block) => Some(block.clone()),
+                _ => None,
+            })
+    }
 }
 
 pub struct WinGuards {
     cfg: GuardsConfig,
     cpu: CpuSampler,
+    snapshot: Option<GuardSnapshot>,
 }
 
 impl WinGuards {
@@ -311,11 +354,17 @@ impl WinGuards {
         Self {
             cfg,
             cpu: CpuSampler { prev: None },
+            snapshot: None,
         }
     }
 
     pub fn update(&mut self, cfg: GuardsConfig) {
         self.cfg = cfg;
+        self.snapshot = None;
+    }
+
+    pub fn snapshot(&self) -> Option<&GuardSnapshot> {
+        self.snapshot.as_ref()
     }
 }
 
@@ -324,23 +373,46 @@ impl Guard for WinGuards {
         // Always sample CPU so the delta spans the last tick, not the whole uptime.
         let cpu = self.cpu.sample();
 
-        if !self.cfg.processes.is_empty() {
-            if let Some(hit) = find_blocking_process(&running_processes(), &self.cfg.processes) {
-                return Some(Block::Process(hit));
-            }
-        }
-        if self.cfg.fullscreen && foreground_is_fullscreen() {
-            return Some(Block::Fullscreen);
-        }
-        if self.cfg.audio_playing && audio_is_playing() {
-            return Some(Block::Audio);
-        }
-        if self.cfg.cpu_above_percent > 0.0 {
-            if let Some(load) = cpu.filter(|&l| l > self.cfg.cpu_above_percent) {
-                return Some(Block::Cpu(load.round() as u8));
-            }
-        }
-        None
+        let snapshot = GuardSnapshot {
+            cpu_percent: cpu,
+            cpu: if self.cfg.cpu_above_percent <= 0.0 {
+                GuardReading::Disabled
+            } else {
+                match cpu {
+                    Some(load) if load > self.cfg.cpu_above_percent => {
+                        GuardReading::Busy(Block::Cpu(load.round() as u8))
+                    }
+                    Some(_) => GuardReading::Clear,
+                    None => GuardReading::Unavailable,
+                }
+            },
+            processes: if self.cfg.processes.is_empty() {
+                GuardReading::Disabled
+            } else {
+                GuardReading::from_result(running_processes().map(|names| {
+                    find_blocking_process(&names, &self.cfg.processes).map(Block::Process)
+                }))
+            },
+            fullscreen: if self.cfg.fullscreen {
+                GuardReading::from_result(
+                    foreground_is_fullscreen().map(|busy| busy.then_some(Block::Fullscreen)),
+                )
+            } else {
+                GuardReading::Disabled
+            },
+            audio: if self.cfg.audio_playing {
+                GuardReading::from_result(
+                    audio_is_playing().map(|busy| busy.then_some(Block::Audio)),
+                )
+            } else {
+                GuardReading::Disabled
+            },
+        };
+        // Preserve the action policy and blocker priority; diagnostics also retain
+        // lower-priority readings instead of hiding them behind the first blocker.
+        let blocker = snapshot.blocker();
+        self.snapshot = Some(snapshot);
+        blocker
     }
 }
 
@@ -497,6 +569,53 @@ mod tests {
         // ...and clearing the list unblocks again.
         guards.update(off);
         assert_eq!(guards.blocker(), None);
+    }
+
+    #[test]
+    fn diagnostic_readings_preserve_blocker_priority_and_fail_open_policy() {
+        let mut snapshot = GuardSnapshot {
+            cpu_percent: Some(80.0),
+            cpu: GuardReading::Busy(Block::Cpu(80)),
+            audio: GuardReading::Busy(Block::Audio),
+            fullscreen: GuardReading::Busy(Block::Fullscreen),
+            processes: GuardReading::Busy(Block::Process("blender.exe".into())),
+        };
+        assert_eq!(
+            snapshot.blocker(),
+            Some(Block::Process("blender.exe".into()))
+        );
+        snapshot.processes = GuardReading::Unavailable;
+        assert_eq!(snapshot.blocker(), Some(Block::Fullscreen));
+        snapshot.fullscreen = GuardReading::Disabled;
+        assert_eq!(snapshot.blocker(), Some(Block::Audio));
+        snapshot.audio = GuardReading::Clear;
+        assert_eq!(snapshot.blocker(), Some(Block::Cpu(80)));
+        snapshot.cpu = GuardReading::Unavailable;
+        assert_eq!(snapshot.blocker(), None);
+        assert_eq!(
+            GuardReading::from_result(Err(anyhow::anyhow!("fake query failure"))),
+            GuardReading::Unavailable
+        );
+    }
+
+    #[test]
+    fn guard_snapshot_is_cached_and_invalidated_on_config_update() {
+        let off = GuardsConfig {
+            cpu_above_percent: 0.0,
+            audio_playing: false,
+            fullscreen: false,
+            processes: Vec::new(),
+        };
+        let mut guards = WinGuards::new(off.clone());
+        assert!(guards.snapshot().is_none());
+        assert_eq!(guards.blocker(), None);
+        let snapshot = guards.snapshot().unwrap();
+        assert_eq!(snapshot.cpu, GuardReading::Disabled);
+        assert_eq!(snapshot.audio, GuardReading::Disabled);
+        assert_eq!(snapshot.fullscreen, GuardReading::Disabled);
+        assert_eq!(snapshot.processes, GuardReading::Disabled);
+        guards.update(off);
+        assert!(guards.snapshot().is_none());
     }
 
     #[test]

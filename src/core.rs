@@ -98,6 +98,7 @@ pub struct Machine<I, S, C, G> {
     paused: bool,
     blocked_by: Option<Block>,
     attempted_input: Option<u32>,
+    observation: Option<(IdleSample, Duration)>,
 }
 
 impl<I: IdleSource, S: Shutdowner, C: Clock, G: Guard> Machine<I, S, C, G> {
@@ -112,6 +113,7 @@ impl<I: IdleSource, S: Shutdowner, C: Clock, G: Guard> Machine<I, S, C, G> {
             paused: false,
             blocked_by: None,
             attempted_input: None,
+            observation: None,
         }
     }
 
@@ -132,6 +134,27 @@ impl<I: IdleSource, S: Shutdowner, C: Clock, G: Guard> Machine<I, S, C, G> {
 
     pub fn guard_mut(&mut self) -> &mut G {
         &mut self.guard
+    }
+
+    pub fn guard(&self) -> &G {
+        &self.guard
+    }
+
+    /// Last input used by the machine, with its age. Does not poll the OS again.
+    pub fn observation(&self) -> Option<(IdleSample, Duration)> {
+        self.observation
+            .map(|(sample, at)| (sample, self.clock.now().saturating_sub(at)))
+    }
+
+    pub fn warning_remaining(&self) -> Option<Duration> {
+        match self.state {
+            State::Warning { started } => Some(
+                self.settings
+                    .warning
+                    .saturating_sub(self.clock.now().saturating_sub(started)),
+            ),
+            _ => None,
+        }
     }
 
     /// What currently blocks shutdown (as of the last `tick`).
@@ -171,6 +194,7 @@ impl<I: IdleSource, S: Shutdowner, C: Clock, G: Guard> Machine<I, S, C, G> {
     pub fn tick(&mut self) -> Result<Event> {
         let input = self.idle.sample();
         let now = self.clock.now();
+        self.observation = Some((input, now));
         let over_threshold =
             input.last_input_id.is_some() && input.idle_for >= self.settings.idle_threshold;
         // Sample every tick: the CPU guard needs deltas between calls.
@@ -311,6 +335,25 @@ mod tests {
         f.idle.set(secs(7199));
         assert_eq!(m.tick().unwrap(), Event::None);
         assert_eq!(m.state(), State::Active);
+    }
+
+    #[test]
+    fn diagnostics_observe_the_last_tick_without_resampling_or_acting() {
+        let (f, mut m) = setup();
+        assert_eq!(m.observation(), None);
+        assert_eq!(m.warning_remaining(), None);
+        f.sample_at(10, 7200, 42);
+        assert_eq!(m.tick().unwrap(), Event::WarningStarted);
+        f.sample_at(20, 0, 99);
+        let (sample, age) = m.observation().unwrap();
+        assert_eq!(sample.idle_for, secs(7200));
+        assert_eq!(sample.last_input_id, Some(42));
+        assert_eq!(age, secs(10));
+        assert_eq!(m.warning_remaining(), Some(secs(50)));
+        assert_eq!(f.shutdowns.get(), 0);
+        assert_eq!(m.tick().unwrap(), Event::WarningCancelled);
+        assert_eq!(m.observation().unwrap().0.last_input_id, Some(99));
+        assert_eq!(m.warning_remaining(), None);
     }
 
     #[test]

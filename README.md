@@ -86,9 +86,10 @@ Do not trust a shutdown tool blindly, including this one. Take two minutes:
 | Item | What it does |
 |---|---|
 | ⏯️ **Pause** | Stop acting until you un-check it. |
-| 😴 **Snooze 1h** | Pause for an hour, then carry on by itself. |
+| 😴 **Snooze** | Pause for 30 minutes, 1 hour, 2 hours or 8 hours, then carry on by itself. |
 | 🔌 **Shutdown now** | Run the chosen action immediately. |
 | ⚙️ **Settings...** | Open the settings window. |
+| 🩺 **Status...** | Read-only native panel: idle/limit, action/mode, countdown or snooze, CPU and all guard readings. Updates with the normal polling interval (every second during a warning). |
 | 📜 **Open logs** | Open the logs folder. |
 | ℹ️ **About** | Version, build, file locations, and an asynchronous GitHub update check. New versions appear in bold green. |
 | 🚪 **Quit** | Exit. |
@@ -131,6 +132,8 @@ Daily files in `%LOCALAPPDATA%\LightsOut\data\logs\`, opened from the tray. They
 ## ❓ FAQ
 
 **It never shuts down.** Hover the icon. The status says *held by: ...* when a guard is busy, or *paused*, *snoozed*, `[log-only]`, `[dry-run]`. Guards, when enabled, are the usual suspects.
+
+Open **Status...** for the full picture. Readings come from the same checks that drive automation, not a second monitor. Unavailable readings are shown explicitly; this panel does not change the existing guard failure policy. It uses native Windows controls without WebView2 or network access.
 
 **It shut down while I was reading or watching a silent video.** Only input counts as activity. Add the player to the programs list, or raise `idle_minutes`.
 
@@ -225,9 +228,10 @@ LightsOut добавляет недостающий контекст. Он сл�
 | Пункт | Что делает |
 |---|---|
 | ⏯️ **Пауза** | Ничего не делать, пока не снимете галочку. |
-| 😴 **Отложить на 1 ч** | Пауза на час, потом работа возобновится сама. |
+| 😴 **Отложить** | Пауза на 30 минут, 1 час, 2 часа или 8 часов, потом работа возобновится сама. |
 | 🔌 **Выключить сейчас** | Сразу выполнить выбранное действие. |
 | ⚙️ **Настройки...** | Открыть окно настроек. |
+| 🩺 **Состояние...** | Нативная read-only панель: простой/порог, действие/режим, отсчёт или отсрочка, CPU и все гарды. Обновляется при штатном опросе (каждую секунду во время предупреждения). |
 | 📜 **Открыть логи** | Открыть папку с логами. |
 | ℹ️ **О программе** | Версия, сборка, расположение файлов и асинхронная проверка обновлений GitHub. Новая версия выделяется жирным зелёным текстом. |
 | 🚪 **Выход** | Закрыть программу. |
@@ -270,6 +274,8 @@ LightsOut ничего не делает, пока **любой** включён
 ## ❓ Вопросы и ответы
 
 **Он никогда не выключает.** Наведите курсор на значок. Статус скажет *держит: ...*, если гард занят, либо *на паузе*, *отложено*, `[только лог]`, `[dry-run]`. Гарда, если он включён, обычно и виноват.
+
+Откройте **Состояние...**, чтобы увидеть все причины. Панель использует те же измерения, что управляют автоматикой, без дополнительного опроса. Отсутствующие данные показаны явно; политика действий при ошибках гардов не меняется. Окно нативное, без WebView2 и сетевых запросов.
 
 **Выключился, пока я читал или смотрел видео без звука.** Активностью считается только ввод. Добавьте плеер в список программ или увеличьте `idle_minutes`.
 

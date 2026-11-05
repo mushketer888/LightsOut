@@ -13,13 +13,14 @@ use tao::event::{Event as TaoEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Window, WindowBuilder};
 use tauri_winrt_notification::Toast;
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
 use wry::{WebContext, WebView, WebViewBuilder};
 
 use crate::about::AboutWindow;
 use crate::config::{Config, Paths};
 use crate::core::{Action, Event, Machine, Shutdowner, State};
+use crate::diagnostics::{DiagnosticsWindow, Snapshot};
 use crate::i18n::{Translator, LANGUAGES};
 use crate::platform::windows::{
     self as win, DryRunShutdowner, SystemClock, WinGuards, WinIdle, WinShutdowner,
@@ -36,6 +37,7 @@ pub enum Control {
     Pause(bool),
     Snooze(Duration),
     Unsnooze,
+    Diagnostics(bool),
     ShutdownNow {
         expected_action: Action,
         revision: u64,
@@ -52,6 +54,10 @@ pub enum Control {
 enum UserEvent {
     Menu(MenuEvent),
     Status(Status),
+    Diagnostics {
+        title: String,
+        text: String,
+    },
     Applied {
         config: Config,
         revision: u64,
@@ -264,6 +270,15 @@ fn toast(title: &str, text: &str) {
     }
 }
 
+fn next_wait(poll: Duration, warning: bool, snooze_remaining: Option<Duration>) -> Duration {
+    let poll = if warning {
+        poll.min(Duration::from_secs(1))
+    } else {
+        poll
+    };
+    snooze_remaining.map_or(poll, |remaining| poll.min(remaining))
+}
+
 fn spawn_worker(
     mut cfg: Config,
     config_file: PathBuf,
@@ -297,6 +312,7 @@ fn spawn_worker(
         let mut last_lang = "";
         let mut last_block = None;
         let mut revision = 0;
+        let mut diagnostics_open = false;
         publish(UserEvent::Applied {
             config: cfg.clone(),
             revision,
@@ -304,6 +320,11 @@ fn spawn_worker(
         });
 
         loop {
+            let snoozed = snooze_until.is_some_and(|until| Instant::now() < until);
+            if !snoozed {
+                snooze_until = None;
+            }
+            machine.set_paused(manual_pause || snoozed);
             // Publish first, so the tray is correct right after start and after every event.
             let text = status_text(&machine, &tr, manual_pause, snooze_until, dry_run);
             if text != last_status || tr.code() != last_lang {
@@ -316,14 +337,35 @@ fn spawn_worker(
                 last_lang = tr.code();
             }
 
-            let wait = if matches!(machine.state(), State::Warning { .. }) {
-                cfg.poll_interval().min(Duration::from_secs(1))
-            } else {
-                cfg.poll_interval()
-            };
+            if diagnostics_open {
+                let snapshot = Snapshot {
+                    status: status_text(&machine, &tr, manual_pause, snooze_until, dry_run),
+                    input: machine.observation(),
+                    countdown: if manual_pause || snooze_until.is_some() {
+                        None
+                    } else {
+                        machine.warning_remaining()
+                    },
+                    held: machine.blocked_by().is_some(),
+                    snooze: snooze_until
+                        .map(|until| until.saturating_duration_since(Instant::now())),
+                    guards: machine.guard().snapshot().cloned(),
+                };
+                publish(UserEvent::Diagnostics {
+                    title: tr.t("diagnostics.title"),
+                    text: snapshot.text(&cfg, &tr),
+                });
+            }
+
+            let wait = next_wait(
+                cfg.poll_interval(),
+                matches!(machine.state(), State::Warning { .. }),
+                snooze_until.map(|until| until.saturating_duration_since(Instant::now())),
+            );
 
             match rx.recv_timeout(wait) {
                 Ok(Control::Quit) | Err(RecvTimeoutError::Disconnected) => break,
+                Ok(Control::Diagnostics(open)) => diagnostics_open = open,
                 Ok(Control::Pause(p)) => {
                     manual_pause = p;
                     if !p {
@@ -411,12 +453,6 @@ fn spawn_worker(
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    let snoozed = snooze_until.is_some_and(|t| Instant::now() < t);
-                    if !snoozed {
-                        snooze_until = None;
-                    }
-                    machine.set_paused(manual_pause || snoozed);
-
                     match machine.tick() {
                         Ok(Event::WarningStarted) => {
                             let secs = cfg.warning_seconds;
@@ -639,10 +675,19 @@ pub fn run(opts: Options) -> Result<()> {
 
     let mut update_known = false;
     let pause = CheckMenuItem::new(tr.t("menu.pause"), true, false, None);
-    let snooze = MenuItem::new(tr.t("menu.snooze"), true, None);
+    let snooze_30m = MenuItem::new(tr.t("menu.snooze_30m"), true, None);
+    let snooze_1h = MenuItem::new(tr.t("menu.snooze_1h"), true, None);
+    let snooze_2h = MenuItem::new(tr.t("menu.snooze_2h"), true, None);
+    let snooze_8h = MenuItem::new(tr.t("menu.snooze_8h"), true, None);
+    let snooze = Submenu::with_items(
+        tr.t("menu.snooze"),
+        true,
+        &[&snooze_30m, &snooze_1h, &snooze_2h, &snooze_8h],
+    )?;
     let unsnooze = MenuItem::new(tr.t("menu.unsnooze"), false, None);
     let now = MenuItem::new(now_label(&tr, cfg_for_ui.action), true, None);
     let settings = MenuItem::new(tr.t("menu.settings"), true, None);
+    let diagnostics = MenuItem::new(tr.t("menu.diagnostics"), true, None);
     let open_logs = MenuItem::new(tr.t("menu.open_logs"), true, None);
     let about = MenuItem::new(about_menu_text(&tr, update_known), true, None);
     let quit = MenuItem::new(tr.t("menu.quit"), true, None);
@@ -655,6 +700,7 @@ pub fn run(opts: Options) -> Result<()> {
         &now,
         &PredefinedMenuItem::separator(),
         &settings,
+        &diagnostics,
         &open_logs,
         &about,
         &PredefinedMenuItem::separator(),
@@ -674,6 +720,7 @@ pub fn run(opts: Options) -> Result<()> {
     let mut worker = Some(worker);
     let mut settings_win: Option<SettingsWindow> = None;
     let mut about_win: Option<AboutWindow> = None;
+    let mut diagnostics_win: Option<DiagnosticsWindow> = None;
     let mut last_cfg = cfg_for_ui;
     let mut revision = 0;
     let mut next_request = 0_u64;
@@ -698,12 +745,28 @@ pub fn run(opts: Options) -> Result<()> {
                 {
                     about_win = None;
                 }
+                if diagnostics_win
+                    .as_ref()
+                    .is_some_and(|w| w.window.id() == window_id)
+                {
+                    diagnostics_win = None;
+                    if let Err(error) = tx.send(Control::Diagnostics(false)) {
+                        tracing::warn!(%error, "diagnostics worker unavailable");
+                    }
+                }
                 return;
             }
             TaoEvent::UserEvent(ev) => ev,
             _ => return,
         };
         match ev {
+            UserEvent::Diagnostics { title, text } => {
+                if let Some(w) = &mut diagnostics_win {
+                    if let Err(error) = w.update(&title, &text) {
+                        tracing::warn!(%error, "diagnostics update failed");
+                    }
+                }
+            }
             UserEvent::UpdateKnown(known) => {
                 update_known = known;
                 about.set_text(about_menu_text(&tr, update_known));
@@ -739,9 +802,14 @@ pub fn run(opts: Options) -> Result<()> {
                 tr = Translator::for_setting(&last_cfg.language, &locale);
                 pause.set_text(tr.t("menu.pause"));
                 snooze.set_text(tr.t("menu.snooze"));
+                snooze_30m.set_text(tr.t("menu.snooze_30m"));
+                snooze_1h.set_text(tr.t("menu.snooze_1h"));
+                snooze_2h.set_text(tr.t("menu.snooze_2h"));
+                snooze_8h.set_text(tr.t("menu.snooze_8h"));
                 unsnooze.set_text(tr.t("menu.unsnooze"));
                 now.set_text(now_label(&tr, last_cfg.action));
                 settings.set_text(tr.t("menu.settings"));
+                diagnostics.set_text(tr.t("menu.diagnostics"));
                 open_logs.set_text(tr.t("menu.open_logs"));
                 about.set_text(about_menu_text(&tr, update_known));
                 quit.set_text(tr.t("menu.quit"));
@@ -782,9 +850,18 @@ pub fn run(opts: Options) -> Result<()> {
             UserEvent::Menu(m) => {
                 if m.id == *pause.id() {
                     let _ = tx.send(Control::Pause(pause.is_checked()));
-                } else if m.id == *snooze.id() {
+                } else if m.id == *snooze_30m.id() {
                     pause.set_checked(false);
-                    let _ = tx.send(Control::Snooze(Duration::from_secs(3600)));
+                    let _ = tx.send(Control::Snooze(Duration::from_secs(30 * 60)));
+                } else if m.id == *snooze_1h.id() {
+                    pause.set_checked(false);
+                    let _ = tx.send(Control::Snooze(Duration::from_secs(60 * 60)));
+                } else if m.id == *snooze_2h.id() {
+                    pause.set_checked(false);
+                    let _ = tx.send(Control::Snooze(Duration::from_secs(2 * 60 * 60)));
+                } else if m.id == *snooze_8h.id() {
+                    pause.set_checked(false);
+                    let _ = tx.send(Control::Snooze(Duration::from_secs(8 * 60 * 60)));
                 } else if m.id == *unsnooze.id() {
                     let _ = tx.send(Control::Unsnooze);
                 } else if m.id == *now.id() {
@@ -819,6 +896,26 @@ pub fn run(opts: Options) -> Result<()> {
                                 // No WebView2: fall back to a plain editor.
                                 tracing::error!("settings dialog failed: {e:#}");
                                 let _ = Command::new("notepad").arg(&paths.config_file).spawn();
+                            }
+                        }
+                    }
+                } else if m.id == *diagnostics.id() {
+                    if let Some(w) = &diagnostics_win {
+                        w.window.set_focus();
+                    } else {
+                        match DiagnosticsWindow::open(target, &tr) {
+                            Ok(mut w) => {
+                                if let Err(error) = tx.send(Control::Diagnostics(true)) {
+                                    tracing::warn!(%error, "diagnostics worker unavailable");
+                                    let _ = w.update(
+                                        &tr.t("diagnostics.title"),
+                                        &tr.t("diagnostics.worker_unavailable"),
+                                    );
+                                }
+                                diagnostics_win = Some(w);
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "diagnostics window failed");
                             }
                         }
                     }
@@ -968,6 +1065,31 @@ mod tests {
         let (_f, m) = machine();
         assert!(status_text(&m, &en(), false, None, true).contains("[dry-run]"));
         assert!(!status_text(&m, &en(), false, None, false).contains("[dry-run]"));
+    }
+
+    #[test]
+    fn snooze_expiry_wakes_the_worker_before_a_long_poll() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(
+            next_wait(Duration::from_secs(86_400), false, Some(hour)),
+            hour
+        );
+        assert_eq!(
+            next_wait(Duration::from_secs(15), false, Some(hour)),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            next_wait(Duration::from_secs(15), true, Some(hour)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            next_wait(Duration::from_secs(15), false, Some(Duration::ZERO)),
+            Duration::ZERO
+        );
+        assert_eq!(
+            next_wait(Duration::from_secs(15), false, None),
+            Duration::from_secs(15)
+        );
     }
 
     #[test]
@@ -1284,8 +1406,13 @@ mod tests {
     const USED_KEYS: &[&str] = &[
         "menu.pause",
         "menu.snooze",
+        "menu.snooze_30m",
+        "menu.snooze_1h",
+        "menu.snooze_2h",
+        "menu.snooze_8h",
         "menu.now",
         "menu.settings",
+        "menu.diagnostics",
         "menu.open_logs",
         "menu.about",
         "menu.about_update",
