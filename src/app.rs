@@ -321,8 +321,8 @@ fn spawn_worker(
 
         loop {
             let snoozed = snooze_until.is_some_and(|until| Instant::now() < until);
-            if !snoozed {
-                snooze_until = None;
+            if !snoozed && snooze_until.take().is_some() {
+                tracing::info!("snooze expired");
             }
             machine.set_paused(manual_pause || snoozed);
             // Publish first, so the tray is correct right after start and after every event.
@@ -440,6 +440,7 @@ fn spawn_worker(
                         Ok(event) => {
                             repair_snapshot = None;
                             publish(event);
+                            tracing::info!(revision, saved = request.is_some(), "config applied");
                         }
                         Err(e) => {
                             tracing::warn!("config not applied: {e:#}");
@@ -456,7 +457,7 @@ fn spawn_worker(
                     match machine.tick() {
                         Ok(Event::WarningStarted) => {
                             let secs = cfg.warning_seconds;
-                            tracing::warn!(secs, "no activity, warning the user");
+                            tracing::warn!(secs, action = ?cfg.action, dry_run, "idle threshold reached; warning user");
                             let key = if cfg.action == Action::Log {
                                 "toast.warning_log"
                             } else {
@@ -478,7 +479,7 @@ fn spawn_worker(
                             toast("LightsOut", &tr.t("toast.cancelled"));
                         }
                         Ok(Event::ShutdownIssued) => {
-                            tracing::warn!("shutdown command issued")
+                            tracing::warn!(action = ?cfg.action, dry_run, "shutdown command issued")
                         }
                         Ok(Event::None) => {}
                         Err(e) => {
@@ -494,6 +495,8 @@ fn spawn_worker(
                     if block != last_block {
                         if let Some(reason) = &block {
                             tracing::info!(?reason, "shutdown held back by a guard");
+                        } else if last_block.is_some() {
+                            tracing::info!("shutdown guard cleared");
                         }
                         last_block = block;
                     }
