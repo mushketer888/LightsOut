@@ -43,6 +43,7 @@ LightsOut adds the missing context. It watches your keyboard and mouse **and** w
 | Tray icon, pause, snooze | ❌ | ❌ | ✅ |
 | Tells you why it did **not** shut down | ❌ | ❌ | ✅ |
 | Settings window | ✅ | ⚠️ clunky | ✅ |
+| New features ahead | ❌ | ❌ | ✅ |
 
 ## 🚀 Features
 
@@ -160,7 +161,7 @@ Add a language: copy `locales/en.toml` to `locales/<code>.toml`, translate it, a
 
 ## ⭐ Like it?
 
-Star the repo, tell a friend who always leaves the PC on overnight, or open an issue with an idea. Pull requests (especially new translations) are welcome.
+Star the repo, tell a friend who always leaves the PC on overnight — or set it up for a parent or grandparent: install it once, and their PC quietly switches itself off when they are done, with a friendly warning first if they are still around. Or open an issue with an idea. Pull requests (especially new translations) are welcome.
 
 ---
 
@@ -185,6 +186,7 @@ LightsOut добавляет недостающий контекст. Он сл�
 | Значок в трее, пауза, отложить | ❌ | ❌ | ✅ |
 | Объясняет, почему **не** выключил | ❌ | ❌ | ✅ |
 | Окно настроек | ✅ | ⚠️ неудобное | ✅ |
+| Новые функции впереди | ❌ | ❌ | ✅ |
 
 ## 🚀 Возможности
 
@@ -302,4 +304,4 @@ cargo run -- --dry-run     # безопасный запуск: пишет в л
 
 ## ⭐ Понравилось?
 
-Поставьте звезду репозиторию, расскажите другу, который всегда оставляет ПК включённым на ночь, или создайте issue с идеей. Pull request'ы, особенно с новыми переводами, приветствуются.
+Поставьте звезду репозиторию, расскажите другу, который всегда оставляет ПК включённым на ночь, — или настройте LightsOut родителям или бабушке с дедушкой: установить один раз, и их компьютер сам тихо погаснет, когда они закончили, а перед этим дружелюбно предупредит, если они ещё за ним. Или создайте issue с идеей. Pull request'ы, особенно с новыми переводами, приветствуются.
