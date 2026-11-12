@@ -1,7 +1,9 @@
 //! Log retention: old daily log files are deleted.
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// How long log files are kept.
 pub const RETENTION_DAYS: u64 = 14;
@@ -33,6 +35,64 @@ pub fn prune_old_logs(dir: &Path, keep_days: u64, now: SystemTime) -> usize {
         }
     }
     removed
+}
+
+/// One line appended straight to the log file when Windows asks to end the
+/// session. Written synchronously, outside `tracing`: the process can be
+/// killed before the buffered writer flushes, so this path must not buffer.
+/// The shape matches the `tracing` default so daily files stay uniform.
+pub fn session_end_line(cancelled: bool, now: SystemTime) -> String {
+    let msg = if cancelled {
+        "windows session end cancelled"
+    } else {
+        "windows session end requested (shutdown, restart, logoff or installer)"
+    };
+    format!("{}  INFO lights_out::app: {msg}\n", rfc3339_micros(now))
+}
+
+/// Appends a session-end line to today's log file in `dir`.
+pub fn append_session_end_line(dir: &Path, cancelled: bool, now: SystemTime) -> std::io::Result<()> {
+    let (y, m, d) = civil_from_days(days_since_epoch(now));
+    let path = dir.join(format!("lights-out.{y:04}-{m:02}-{d:02}.log"));
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(session_end_line(cancelled, now).as_bytes())
+}
+
+/// `YYYY-MM-DDTHH:MM:SS.ffffffZ` in UTC, the same shape `tracing` writes.
+fn rfc3339_micros(now: SystemTime) -> String {
+    let dur = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = dur.as_secs() as i64;
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    let (h, min, s) = (
+        secs.rem_euclid(86_400) / 3600,
+        secs.rem_euclid(3600) / 60,
+        secs.rem_euclid(60),
+    );
+    format!(
+        "{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{:06}Z",
+        dur.subsec_micros()
+    )
+}
+
+fn days_since_epoch(now: SystemTime) -> i64 {
+    now.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        / 86_400
+}
+
+/// Days since 1970-01-01 to (year, month, day); Howard Hinnant's `civil_from_days`.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
 #[cfg(test)]
@@ -103,6 +163,33 @@ mod tests {
             prune_old_logs(&dir.join("missing"), 14, SystemTime::now()),
             0
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_end_line_matches_tracing_shape() {
+        // 2024-02-29T12:00:00Z: exercises the leap-day path of the date math.
+        let t = UNIX_EPOCH + Duration::from_secs(1_709_208_000);
+        assert_eq!(
+            session_end_line(false, t),
+            "2024-02-29T12:00:00.000000Z  INFO lights_out::app: \
+             windows session end requested (shutdown, restart, logoff or installer)\n"
+        );
+        assert!(session_end_line(true, t)
+            .ends_with("  INFO lights_out::app: windows session end cancelled\n"));
+    }
+
+    #[test]
+    fn session_end_append_creates_and_extends_today_file() {
+        let dir = temp_dir("session_end");
+        let t = UNIX_EPOCH + Duration::from_secs(1_709_208_000);
+        append_session_end_line(&dir, false, t).unwrap();
+        append_session_end_line(&dir, true, t).unwrap();
+
+        let text = std::fs::read_to_string(dir.join("lights-out.2024-02-29.log")).unwrap();
+        assert_eq!(text.matches("lights_out::app").count(), 2);
+        assert!(text.contains("session end requested"));
+        assert!(text.contains("session end cancelled"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -100,9 +100,17 @@ impl SettingsWindow {
         tr: &Translator,
         data_dir: PathBuf,
     ) -> Result<Self> {
+        // Fit the screen: 760 logical px overflows 768p displays (and far
+        // worse at 125%+ scaling). Reserve ~100 px for title bar and taskbar;
+        // the page itself scrolls if the window still comes out shorter.
+        let height = target
+            .primary_monitor()
+            .map(|m| m.size().height as f64 / m.scale_factor() - 100.0)
+            .map(|h| h.clamp(420.0, 700.0))
+            .unwrap_or(640.0);
         let window = WindowBuilder::new()
             .with_title(tr.t("settings.window_title"))
-            .with_inner_size(LogicalSize::new(480.0, 760.0))
+            .with_inner_size(LogicalSize::new(480.0, height))
             .build(target)
             .context("settings window")?;
         let mut context = WebContext::new(Some(data_dir));
@@ -953,6 +961,7 @@ pub fn run(opts: Options) -> Result<()> {
                         }
                     }
                 } else if m.id == *quit.id() {
+                    tracing::info!("quit requested from tray menu");
                     let _ = tx.send(Control::Quit);
                     if let Some(w) = worker.take() {
                         let _ = w.join();

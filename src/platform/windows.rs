@@ -1,17 +1,20 @@
 //! Thin Win32 wrapper. The only place with `unsafe`.
 
+use std::cell::RefCell;
 use std::mem::size_of;
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_NO_MORE_FILES, FILETIME, HANDLE, LUID,
-    RECT,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_NO_MORE_FILES, FILETIME, HANDLE,
+    HINSTANCE, HWND, LPARAM, LUID, LRESULT, RECT, WPARAM,
 };
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MonitorFromWindow, HBRUSH, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
 use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
@@ -26,6 +29,8 @@ use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::SetSuspendState;
 use windows::Win32::System::Shutdown::{ExitWindowsEx, EWX_POWEROFF, SHUTDOWN_REASON};
 use windows::Win32::System::SystemInformation::GetTickCount;
@@ -34,12 +39,16 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowRect, MessageBoxW, IDYES, MB_DEFBUTTON2,
-    MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO,
+    CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW, GetClassNameW,
+    GetForegroundWindow, GetMessageW, GetWindowRect, HCURSOR, HICON, IDYES,
+    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO,
+    MessageBoxW, MSG, PostQuitMessage, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSW, WM_ENDSESSION, WM_QUERYENDSESSION,
 };
 
 use crate::config::GuardsConfig;
 use crate::core::{Action, Block, Clock, Guard, IdleSample, IdleSource, Shutdowner};
+use crate::logs;
 
 /// COM is needed by the audio guard; call once on the thread that polls guards.
 pub fn init_com() -> Result<()> {
@@ -54,6 +63,103 @@ pub fn user_locale() -> String {
         return String::new();
     }
     String::from_utf16_lossy(&buf[..len as usize - 1])
+}
+
+// ---------- session end ----------
+
+/// Hidden top-level window that logs the end of a Windows session.
+///
+/// tao has no session-end event (tauri-apps/tao#1115) and answers
+/// `WM_ENDSESSION` with `std::process::exit(0)`, which skips destructors, so
+/// the buffered `tracing` writer never flushes. Windows delivers
+/// `WM_QUERYENDSESSION` to every window before any window receives
+/// `WM_ENDSESSION`, so the "requested" line is written during the query phase,
+/// strictly before tao can exit the process. Writes are synchronous appends.
+pub fn spawn_session_end_logger(log_dir: PathBuf) -> thread::JoinHandle<()> {
+    thread::Builder::new()
+        .name("session-end".into())
+        .spawn(move || session_end_pump(log_dir))
+        .expect("spawn session-end thread")
+}
+
+thread_local! {
+    static SESSION_END_LOG_DIR: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
+}
+
+unsafe extern "system" fn session_end_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_QUERYENDSESSION => {
+            SESSION_END_LOG_DIR.with(|dir| {
+                let _ = logs::append_session_end_line(&dir.borrow(), false, SystemTime::now());
+            });
+            LRESULT(1) // never block the shutdown
+        }
+        WM_ENDSESSION if wparam.0 == 0 => {
+            // The session end was cancelled after all.
+            SESSION_END_LOG_DIR.with(|dir| {
+                let _ = logs::append_session_end_line(&dir.borrow(), true, SystemTime::now());
+            });
+            LRESULT(0)
+        }
+        WM_ENDSESSION => {
+            PostQuitMessage(0); // already logged during the query phase
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+fn session_end_pump(log_dir: PathBuf) {
+    unsafe {
+        let Ok(module) = GetModuleHandleW(None) else {
+            return;
+        };
+        let hinstance: HINSTANCE = module.into();
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(session_end_wndproc),
+            hInstance: hinstance,
+            lpszClassName: w!("LightsOut.SessionEnd"),
+            style: WNDCLASS_STYLES(0),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hIcon: HICON::default(),
+            hCursor: HCURSOR::default(),
+            hbrBackground: HBRUSH::default(),
+            lpszMenuName: PCWSTR::null(),
+        };
+        if RegisterClassW(&wc) == 0 {
+            return;
+        }
+        SESSION_END_LOG_DIR.with(|dir| *dir.borrow_mut() = log_dir);
+        // A hidden top-level window, not HWND_MESSAGE: message-only windows
+        // do not receive the shutdown broadcasts.
+        let Ok(_hwnd) = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("LightsOut.SessionEnd"),
+            w!("LightsOut session end watcher"),
+            WINDOW_STYLE(0),
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        ) else {
+            return;
+        };
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
 }
 
 // ---------- idle ----------
