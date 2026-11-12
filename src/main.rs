@@ -49,7 +49,6 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
-
     // tao exits the process on WM_ENDSESSION without running destructors;
     // this hidden window logs the session end before that can happen.
     let _session_end_logger = win::spawn_session_end_logger(paths.log_dir.clone());

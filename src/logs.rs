@@ -51,7 +51,11 @@ pub fn session_end_line(cancelled: bool, now: SystemTime) -> String {
 }
 
 /// Appends a session-end line to today's log file in `dir`.
-pub fn append_session_end_line(dir: &Path, cancelled: bool, now: SystemTime) -> std::io::Result<()> {
+pub fn append_session_end_line(
+    dir: &Path,
+    cancelled: bool,
+    now: SystemTime,
+) -> std::io::Result<()> {
     let (y, m, d) = civil_from_days(days_since_epoch(now));
     let path = dir.join(format!("lights-out.{y:04}-{m:02}-{d:02}.log"));
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -75,10 +79,7 @@ fn rfc3339_micros(now: SystemTime) -> String {
 }
 
 fn days_since_epoch(now: SystemTime) -> i64 {
-    now.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-        / 86_400
+    now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 / 86_400
 }
 
 /// Days since 1970-01-01 to (year, month, day); Howard Hinnant's `civil_from_days`.

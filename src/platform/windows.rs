@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_NO_MORE_FILES, FILETIME, HANDLE,
-    HINSTANCE, HWND, LPARAM, LUID, LRESULT, RECT, WPARAM,
+    HINSTANCE, HWND, LPARAM, LRESULT, LUID, RECT, WPARAM,
 };
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 use windows::Win32::Graphics::Gdi::{
@@ -39,11 +39,11 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW, GetClassNameW,
-    GetForegroundWindow, GetMessageW, GetWindowRect, HCURSOR, HICON, IDYES,
-    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO,
-    MessageBoxW, MSG, PostQuitMessage, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WNDCLASS_STYLES, WNDCLASSW, WM_ENDSESSION, WM_QUERYENDSESSION,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClassNameW, GetForegroundWindow,
+    GetMessageW, GetWindowRect, MessageBoxW, PostQuitMessage, RegisterClassW, TranslateMessage,
+    CW_USEDEFAULT, HCURSOR, HICON, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
+    MB_SETFOREGROUND, MB_YESNO, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ENDSESSION,
+    WM_QUERYENDSESSION, WNDCLASSW, WNDCLASS_STYLES,
 };
 
 use crate::config::GuardsConfig;
